@@ -1,0 +1,94 @@
+dependencies:
+  atanisoft/esp_lcd_touch_xpt2046:
+    dependencies: []
+    source:
+      path: components\managed_components\atanisoft__esp_lcd_touch_xpt2046
+      type: local
+    version: 1.0.6
+  espressif/cmake_utilities:
+    dependencies: []
+    source:
+      path: components\managed_components\espressif__cmake_utilities
+      type: local
+    version: 0.5.3
+  espressif/dl_fft:
+    dependencies: []
+    source:
+      path: components\managed_components\espressif__dl_fft
+      type: local
+    version: 0.4.0
+  espressif/esp-dl:
+    dependencies: []
+    source:
+      path: components\managed_components\espressif__esp-dl
+      type: local
+    version: 3.3.4
+  espressif/esp-dsp:
+    dependencies: []
+    source:
+      path: components\managed_components\espressif__esp-dsp
+      type: local
+    version: 1.8.0
+  espressif/esp_cam_sensor:
+    dependencies: []
+    source:
+      path: components\managed_components\espressif__esp_cam_sensor
+      type: local
+    version: 1.7.0
+  espressif/esp_lcd_touch:
+    dependencies: []
+    source:
+      path: components\managed_components\espressif__esp_lcd_touch
+      type: local
+    version: 1.2.1
+  espressif/esp_lcd_touch_stmpe610:
+    dependencies: []
+    source:
+      path: components\managed_components\espressif__esp_lcd_touch_stmpe610
+      type: local
+    version: 1.0.8
+  espressif/esp_new_jpeg:
+    dependencies: []
+    source:
+      path: components\managed_components\espressif__esp_new_jpeg
+      type: local
+    version: 1.0.1
+  espressif/esp_sccb_intf:
+    dependencies: []
+    source:
+      path: components\managed_components\espressif__esp_sccb_intf
+      type: local
+    version: 0.0.8
+  espressif/human_face_detect:
+    dependencies: []
+    source:
+      path: components\managed_components\espressif__human_face_detect
+      type: local
+    version: 0.4.2
+  idf:
+    source:
+      type: idf
+    version: 6.0.0
+  lvgl/lvgl:
+    dependencies: []
+    source:
+      path: components\managed_components\lvgl__lvgl
+      type: local
+    version: 9.3.0
+direct_dependencies:
+- atanisoft/esp_lcd_touch_xpt2046
+- espressif/cmake_utilities
+- espressif/dl_fft
+- espressif/esp-dl
+- espressif/esp-dsp
+- espressif/esp_cam_sensor
+- espressif/esp_lcd_touch
+- espressif/esp_lcd_touch_stmpe610
+- espressif/esp_new_jpeg
+- espressif/esp_sccb_intf
+- espressif/human_face_detect
+- idf
+- lvgl/lvgl
+manifest_hash: 8c8b87712dcf9cff21d24b09644e0dde810944a79c3796513c2d16a4c0a066a5
+target: esp32p4
+version: 3.0.0

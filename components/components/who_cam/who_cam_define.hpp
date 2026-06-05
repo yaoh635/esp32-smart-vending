@@ -1,0 +1,93 @@
+#pragma once
+#include <sys/time.h>
+#include "dl_image.hpp"
+#if CONFIG_IDF_TARGET_ESP32S3
+#include "esp_camera.h"
+#include "bsp/esp-bsp.h"
+#endif
+
+namespace who {
+namespace cam {
+enum class cam_fb_fmt_t { CAM_FB_FMT_RGB565, CAM_FB_FMT_RGB888, CAM_FB_FMT_JPEG, CAM_FB_FMT_UKN };
+
+#if CONFIG_IDF_TARGET_ESP32S3
+inline framesize_t get_cam_frame_size_from_lcd_resolution()
+{
+    for (int i = FRAMESIZE_INVALID - 1; i >= 0; i--) {
+        if (resolution[i].width <= BSP_LCD_H_RES && resolution[i].height <= BSP_LCD_V_RES) {
+            return (framesize_t)i;
+        }
+    }
+    return FRAMESIZE_INVALID;
+}
+
+inline cam_fb_fmt_t pix_fmt2cam_fb_fmt(pixformat_t pix_fmt)
+{
+    switch (pix_fmt) {
+    case PIXFORMAT_RGB565:
+        return cam_fb_fmt_t::CAM_FB_FMT_RGB565;
+    case PIXFORMAT_RGB888:
+        return cam_fb_fmt_t::CAM_FB_FMT_RGB888;
+    case PIXFORMAT_JPEG:
+        return cam_fb_fmt_t::CAM_FB_FMT_JPEG;
+    default:
+        return cam_fb_fmt_t::CAM_FB_FMT_UKN;
+    }
+}
+#endif
+
+inline cam_fb_fmt_t dl_pix_fmt2cam_fb_fmt(dl::image::pix_type_t dl_pix_fmt)
+{
+    switch (dl_pix_fmt) {
+    case dl::image::DL_IMAGE_PIX_TYPE_RGB565LE:
+        return cam_fb_fmt_t::CAM_FB_FMT_RGB565;
+    case dl::image::DL_IMAGE_PIX_TYPE_RGB888:
+        return cam_fb_fmt_t::CAM_FB_FMT_RGB888;
+    default:
+        return cam_fb_fmt_t::CAM_FB_FMT_UKN;
+    }
+}
+
+typedef struct cam_fb_s {
+    void *buf;
+    size_t len;
+    uint16_t width;
+    uint16_t height;
+    cam_fb_fmt_t format;
+    struct timeval timestamp;
+    void *ret;
+    cam_fb_s() = default;
+#if CONFIG_IDF_TARGET_ESP32S3
+    cam_fb_s(const camera_fb_t &fb)
+    {
+        buf = (void *)fb.buf;
+        len = fb.len;
+        width = (uint16_t)fb.width;
+        height = (uint16_t)fb.height;
+        format = pix_fmt2cam_fb_fmt(fb.format);
+        timestamp = fb.timestamp;
+        ret = (void *)(&fb);
+    }
+#endif
+    cam_fb_s(const dl::image::img_t &img, const struct timeval &time)
+    {
+        buf = img.data;
+        len = img.bytes();
+        width = img.width;
+        height = img.height;
+        format = dl_pix_fmt2cam_fb_fmt(img.pix_type);
+        timestamp = time;
+        ret = nullptr;
+    }
+    operator dl::image::img_t() const
+    {
+        return {.data = buf,
+                .width = width,
+                .height = height,
+                .pix_type = format == who::cam::cam_fb_fmt_t::CAM_FB_FMT_RGB565 ? dl::image::DL_IMAGE_PIX_TYPE_RGB565LE
+                                                                                : dl::image::DL_IMAGE_PIX_TYPE_RGB888};
+    }
+} cam_fb_t;
+
+} // namespace cam
+} // namespace who

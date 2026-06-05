@@ -1,0 +1,137 @@
+menu "SPI LCD Touch Configuration"
+
+    config SPI_LCD_TOUCH_SCLK_GPIO
+        int "SPI Clock GPIO"
+        default 20
+        help
+            GPIO pin number for SPI clock signal.
+
+    config SPI_LCD_TOUCH_MOSI_GPIO
+        int "SPI MOSI GPIO"
+        default 21
+        help
+            GPIO pin number for SPI Master Out Slave In signal.
+
+    config SPI_LCD_TOUCH_MISO_GPIO
+        int "SPI MISO GPIO"
+        default 6
+        help
+            GPIO pin number for SPI Master In Slave Out signal.
+
+    config SPI_LCD_TOUCH_LCD_DC_GPIO
+        int "LCD DC GPIO"
+        default 23
+        help
+            GPIO pin number for LCD Data/Command selection.
+
+    config SPI_LCD_TOUCH_LCD_CS_GPIO
+        int "LCD CS GPIO"
+        default 4
+        help
+            GPIO pin number for LCD chip select.
+
+    config SPI_LCD_TOUCH_LCD_RST_GPIO
+        int "LCD Reset GPIO"
+        default 26
+        help
+            GPIO pin number for LCD reset.
+
+    config SPI_LCD_TOUCH_BK_LIGHT_GPIO
+        int "Backlight GPIO"
+        default 5
+        help
+            GPIO pin number for LCD backlight control.
+
+    config SPI_LCD_TOUCH_H_RES
+        int "LCD Horizontal Resolution"
+        default 320
+        help
+            Horizontal resolution in pixels.
+
+    config SPI_LCD_TOUCH_V_RES
+        int "LCD Vertical Resolution"
+        default 480
+        help
+            Vertical resolution in pixels.
+
+    config SPI_LCD_TOUCH_PIXEL_CLOCK_HZ
+        int "Pixel Clock (Hz)"
+        default 20000000
+        help
+            LCD pixel clock frequency in Hz.
+
+    config SPI_LCD_TOUCH_DRAW_BUF_LINES
+        int "LVGL Draw Buffer Lines"
+        default 20
+        help
+            Number of display lines per draw buffer.
+
+    config SPI_LCD_TOUCH_TICK_PERIOD_MS
+        int "LVGL Tick Period (ms)"
+        default 2
+        help
+            LVGL tick timer period in milliseconds.
+
+    config SPI_LCD_TOUCH_TASK_STACK_SIZE
+        int "LVGL Task Stack Size"
+        default 16384
+        help
+            Stack size for the LVGL task in bytes.
+
+    config SPI_LCD_TOUCH_TASK_PRIORITY
+        int "LVGL Task Priority"
+        default 2
+        help
+            FreeRTOS task priority for the LVGL task.
+
+    menu "Touch Panel"
+
+        config SPI_LCD_TOUCH_ENABLED
+            bool "Enable Touch Panel"
+            default n
+            help
+                Enable this option if you wish to use display touch.
+
+        choice SPI_LCD_TOUCH_CONTROLLER
+            prompt "Touch Controller Model"
+            depends on SPI_LCD_TOUCH_ENABLED
+            default SPI_LCD_TOUCH_CONTROLLER_STMPE610
+            help
+                Select LCD touch controller model.
+
+            config SPI_LCD_TOUCH_CONTROLLER_STMPE610
+                bool "STMPE610"
+                help
+                    Touch controller STMPE610 connected via SPI.
+
+            config SPI_LCD_TOUCH_CONTROLLER_XPT2046
+                bool "XPT2046"
+                help
+                    Touch controller XPT2046 connected via SPI.
+        endchoice
+
+        config SPI_LCD_TOUCH_CS_GPIO
+            int "Touch CS GPIO"
+            default 3
+            depends on SPI_LCD_TOUCH_ENABLED
+            help
+                GPIO pin number for touch controller chip select.
+
+        config SPI_LCD_TOUCH_INT_GPIO
+            int "Touch Interrupt GPIO"
+            default 2
+            depends on SPI_LCD_TOUCH_ENABLED
+            help
+                GPIO pin number for touch controller interrupt.
+
+        config SPI_LCD_TOUCH_MIRROR_Y
+            bool "Mirror Y axis"
+            default y if SPI_LCD_TOUCH_CONTROLLER_XPT2046
+            default n
+            depends on SPI_LCD_TOUCH_ENABLED
+            help
+                Mirror the Y axis of touch coordinates.
+
+    endmenu
+
+endmenu

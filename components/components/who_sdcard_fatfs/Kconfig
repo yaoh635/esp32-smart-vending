@@ -1,0 +1,63 @@
+menu "SD Card FAT Filesystem"
+
+    config SDCARD_MOUNT_POINT
+        string "SD card mount point"
+        default "/sdcard"
+        help
+            VFS mount point for the SD card FAT filesystem.
+
+    config SDCARD_MOUNT_FORMAT_ON_FAIL
+        bool "Format SD card if mount fails"
+        default y
+        help
+            If enabled, the SD card will be formatted if mounting fails
+            (e.g., first time use or corrupted filesystem).
+
+    config SDCARD_SDMMC_WIDTH
+        int "SDMMC bus width (1 or 4)"
+        default 1
+        range 1 4
+        help
+            SDMMC bus width. 1-bit mode uses CLK, CMD, D0 only.
+            4-bit mode adds D1, D2, D3.
+
+    config SDCARD_SDMMC_CLK_GPIO
+        int "SDMMC CLK GPIO"
+        default 43
+        help
+            GPIO pin for SDMMC clock signal.
+
+    config SDCARD_SDMMC_CMD_GPIO
+        int "SDMMC CMD GPIO"
+        default 44
+        help
+            GPIO pin for SDMMC command signal.
+
+    config SDCARD_SDMMC_D0_GPIO
+        int "SDMMC D0 GPIO"
+        default 39
+        help
+            GPIO pin for SDMMC data line 0.
+
+    config SDCARD_SDMMC_D1_GPIO
+        int "SDMMC D1 GPIO"
+        default 40
+        depends on SDCARD_SDMMC_WIDTH >= 4
+        help
+            GPIO pin for SDMMC data line 1 (4-bit mode only).
+
+    config SDCARD_SDMMC_D2_GPIO
+        int "SDMMC D2 GPIO"
+        default 41
+        depends on SDCARD_SDMMC_WIDTH >= 4
+        help
+            GPIO pin for SDMMC data line 2 (4-bit mode only).
+
+    config SDCARD_SDMMC_D3_GPIO
+        int "SDMMC D3 GPIO"
+        default 42
+        depends on SDCARD_SDMMC_WIDTH >= 4
+        help
+            GPIO pin for SDMMC data line 3 (4-bit mode only).
+
+endmenu

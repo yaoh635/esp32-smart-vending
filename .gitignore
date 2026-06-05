@@ -1,0 +1,12 @@
+build/
+managed_components/
+sdkconfig
+*.bin
+*.elf
+*.map
+.cache/
+.vscode/
+__pycache__/
+sdkconfig.old
+.claude/
+CLAUDE.md
