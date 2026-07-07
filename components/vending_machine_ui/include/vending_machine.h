@@ -20,6 +20,11 @@ extern "C" {
 #define VENDING_MOTOR_GPIO  7
 #endif
 
+/* 舵机控制 GPIO 引脚（每个商品对应一个舵机） */
+#ifndef VENDING_SERVO_COUNT
+#define VENDING_SERVO_COUNT  5
+#endif
+
 /**
  * @brief 自动售货机状态枚举
  */
@@ -62,6 +67,7 @@ typedef void (*vending_purchase_cb_t)(const char *product_name,
  */
 typedef struct {
     int motor_gpio;                  /**< 电机控制 GPIO 引脚（-1 表示禁用电机） */
+    int servo_gpios[VENDING_SERVO_COUNT]; /**< 舵机 GPIO 引脚数组（每个商品对应一个舵机，-1 表示禁用） */
     const product_t *products;       /**< 商品目录数组（NULL 使用默认商品） */
     uint8_t product_count;           /**< 商品数量 */
     vending_purchase_cb_t purchase_cb; /**< 购买完成回调（NULL 不回调） */

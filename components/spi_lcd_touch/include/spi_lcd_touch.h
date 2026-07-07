@@ -94,6 +94,26 @@ void spi_lcd_touch_unlock(void);
  */
 void spi_lcd_touch_deinit(void);
 
+/**
+ * @brief 仅释放显示资源（LVGL + LCD 面板），保留触摸控制器和 SPI 总线
+ *        用于深度睡眠前：关闭显示省电，但保持 XPT2046 触摸监控以支持触摸唤醒。
+ */
+void spi_lcd_touch_deinit_display_only(void);
+
+/**
+ * @brief 检查 SPI 总线和触摸控制器是否已初始化（显示部分可能未初始化）
+ * @return true 表示 SPI 总线和触摸控制器仍然活跃
+ */
+bool spi_lcd_touch_is_bus_active(void);
+
+/**
+ * @brief 读取触摸状态（调试用）
+ * @param pressed  输出：是否有触摸
+ * @param x        输出：触摸 X 坐标
+ * @param y        输出：触摸 Y 坐标
+ */
+void spi_lcd_touch_read(bool *pressed, uint16_t *x, uint16_t *y);
+
 #ifdef __cplusplus
 }
 #endif

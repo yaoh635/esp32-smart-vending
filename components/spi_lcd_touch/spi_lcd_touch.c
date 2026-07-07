@@ -281,6 +281,8 @@ esp_err_t spi_lcd_touch_init(const spi_lcd_touch_config_t *config,
         s_config = *config;
     }
 
+    bool bus_already_active = spi_lcd_touch_is_bus_active();
+
     /* Turn off LCD backlight initially */
     ESP_LOGI(TAG, "Turn off LCD backlight");
     gpio_config_t bk_gpio_config = {
@@ -289,17 +291,21 @@ esp_err_t spi_lcd_touch_init(const spi_lcd_touch_config_t *config,
     };
     ESP_ERROR_CHECK(gpio_config(&bk_gpio_config));
 
-    /* Initialize SPI bus */
-    ESP_LOGI(TAG, "Initialize SPI bus");
-    spi_bus_config_t buscfg = {
-        .sclk_io_num = s_config.sclk_gpio,
-        .mosi_io_num = s_config.mosi_gpio,
-        .miso_io_num = s_config.miso_gpio,
-        .quadwp_io_num = -1,
-        .quadhd_io_num = -1,
-        .max_transfer_sz = s_config.h_res * 80 * sizeof(uint16_t),
-    };
-    ESP_ERROR_CHECK(spi_bus_initialize(LCD_HOST, &buscfg, SPI_DMA_CH_AUTO));
+    if (!bus_already_active) {
+        /* Initialize SPI bus (only if not already active) */
+        ESP_LOGI(TAG, "Initialize SPI bus");
+        spi_bus_config_t buscfg = {
+            .sclk_io_num = s_config.sclk_gpio,
+            .mosi_io_num = s_config.mosi_gpio,
+            .miso_io_num = s_config.miso_gpio,
+            .quadwp_io_num = -1,
+            .quadhd_io_num = -1,
+            .max_transfer_sz = s_config.h_res * 80 * sizeof(uint16_t),
+        };
+        ESP_ERROR_CHECK(spi_bus_initialize(LCD_HOST, &buscfg, SPI_DMA_CH_AUTO));
+    } else {
+        ESP_LOGI(TAG, "SPI bus already active, skipping initialization");
+    }
 
     /* Install LCD panel IO */
     ESP_LOGI(TAG, "Install panel IO");
@@ -381,59 +387,63 @@ esp_err_t spi_lcd_touch_init(const spi_lcd_touch_config_t *config,
     ESP_ERROR_CHECK(esp_lcd_panel_io_register_event_callbacks(io_handle, &cbs, display));
 
 #if CONFIG_SPI_LCD_TOUCH_ENABLED
-    /* Initialize touch controller */
-    esp_lcd_panel_io_handle_t tp_io_handle = NULL;
-    esp_lcd_panel_io_spi_config_t tp_io_config =
+    if (!bus_already_active) {
+        /* Initialize touch controller (only if SPI bus was freshly initialized) */
+        esp_lcd_panel_io_handle_t tp_io_handle = NULL;
+        esp_lcd_panel_io_spi_config_t tp_io_config =
 #ifdef CONFIG_SPI_LCD_TOUCH_CONTROLLER_STMPE610
-        ESP_LCD_TOUCH_IO_SPI_STMPE610_CONFIG(s_config.touch_cs_gpio);
+            ESP_LCD_TOUCH_IO_SPI_STMPE610_CONFIG(s_config.touch_cs_gpio);
 #elif CONFIG_SPI_LCD_TOUCH_CONTROLLER_XPT2046
-        ESP_LCD_TOUCH_IO_SPI_XPT2046_CONFIG(s_config.touch_cs_gpio);
+            ESP_LCD_TOUCH_IO_SPI_XPT2046_CONFIG(s_config.touch_cs_gpio);
 #endif
 
-    ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)LCD_HOST, &tp_io_config, &tp_io_handle));
-    s_touch_io = tp_io_handle;
+        ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)LCD_HOST, &tp_io_config, &tp_io_handle));
+        s_touch_io = tp_io_handle;
 
-    /* Configure touch INT pin as input */
-    if (s_config.touch_int_gpio >= 0) {
-        gpio_config_t int_cfg = {
-            .mode = GPIO_MODE_INPUT,
-            .pin_bit_mask = 1ULL << s_config.touch_int_gpio,
-            .pull_up_en = GPIO_PULLUP_ENABLE,
+        /* Configure touch INT pin as input */
+        if (s_config.touch_int_gpio >= 0) {
+            gpio_config_t int_cfg = {
+                .mode = GPIO_MODE_INPUT,
+                .pin_bit_mask = 1ULL << s_config.touch_int_gpio,
+                .pull_up_en = GPIO_PULLUP_ENABLE,
+            };
+            gpio_config(&int_cfg);
+        }
+
+        esp_lcd_touch_config_t tp_cfg = {
+            .x_max = s_config.h_res,
+            .y_max = s_config.v_res,
+            .rst_gpio_num = -1,
+            .int_gpio_num = s_config.touch_int_gpio,
+            .flags = {
+                .swap_xy = 0,
+                .mirror_x = 0,
+                .mirror_y = s_config.mirror_y ? 1 : 0,
+            },
         };
-        gpio_config(&int_cfg);
-    }
-
-    esp_lcd_touch_config_t tp_cfg = {
-        .x_max = s_config.h_res,
-        .y_max = s_config.v_res,
-        .rst_gpio_num = -1,
-        .int_gpio_num = s_config.touch_int_gpio,
-        .flags = {
-            .swap_xy = 0,
-            .mirror_x = 0,
-            .mirror_y = s_config.mirror_y ? 1 : 0,
-        },
-    };
 
 #if CONFIG_SPI_LCD_TOUCH_CONTROLLER_STMPE610
-    ESP_LOGI(TAG, "Initialize touch controller STMPE610");
-    esp_err_t touch_err = esp_lcd_touch_new_spi_stmpe610(tp_io_handle, &tp_cfg, &s_touch_handle);
-    if (touch_err != ESP_OK) {
-        ESP_LOGE(TAG, "STMPE610 init failed: %s (0x%x)", esp_err_to_name(touch_err), touch_err);
-        s_touch_handle = NULL;
-    } else {
-        ESP_LOGI(TAG, "STMPE610 initialized successfully");
-    }
+        ESP_LOGI(TAG, "Initialize touch controller STMPE610");
+        esp_err_t touch_err = esp_lcd_touch_new_spi_stmpe610(tp_io_handle, &tp_cfg, &s_touch_handle);
+        if (touch_err != ESP_OK) {
+            ESP_LOGE(TAG, "STMPE610 init failed: %s (0x%x)", esp_err_to_name(touch_err), touch_err);
+            s_touch_handle = NULL;
+        } else {
+            ESP_LOGI(TAG, "STMPE610 initialized successfully");
+        }
 #elif CONFIG_SPI_LCD_TOUCH_CONTROLLER_XPT2046
-    ESP_LOGI(TAG, "Initialize touch controller XPT2046");
-    esp_err_t touch_err = esp_lcd_touch_new_spi_xpt2046(tp_io_handle, &tp_cfg, &s_touch_handle);
-    if (touch_err != ESP_OK) {
-        ESP_LOGE(TAG, "XPT2046 init failed: %s (0x%x)", esp_err_to_name(touch_err), touch_err);
-        s_touch_handle = NULL;
-    } else {
-        ESP_LOGI(TAG, "XPT2046 initialized successfully");
-    }
+        ESP_LOGI(TAG, "Initialize touch controller XPT2046");
+        esp_err_t touch_err = esp_lcd_touch_new_spi_xpt2046(tp_io_handle, &tp_cfg, &s_touch_handle);
+        if (touch_err != ESP_OK) {
+            ESP_LOGE(TAG, "XPT2046 init failed: %s (0x%x)", esp_err_to_name(touch_err), touch_err);
+            s_touch_handle = NULL;
+        } else {
+            ESP_LOGI(TAG, "XPT2046 initialized successfully");
+        }
 #endif
+    } else {
+        ESP_LOGI(TAG, "Touch controller already active, skipping initialization");
+    }
 
     /* Create touch input device */
     static lv_indev_t *indev;
@@ -463,6 +473,85 @@ void spi_lcd_touch_start_task(void)
 }
 
 /**
+ * @brief 读取触摸状态（调试用，直接通过 SPI 查询 XPT2046）
+ */
+void spi_lcd_touch_read(bool *pressed, uint16_t *x, uint16_t *y)
+{
+#if CONFIG_SPI_LCD_TOUCH_ENABLED
+    if (s_touch_handle == NULL) {
+        *pressed = false;
+        *x = 0;
+        *y = 0;
+        return;
+    }
+
+    esp_lcd_touch_read_data(s_touch_handle);
+
+    uint8_t touchpad_cnt = 0;
+    esp_lcd_touch_point_data_t points[1] = {0};
+    esp_lcd_touch_get_data(s_touch_handle, points, &touchpad_cnt, 1);
+
+    if (touchpad_cnt > 0) {
+        *pressed = true;
+        *x = points[0].x;
+        *y = points[0].y;
+    } else {
+        *pressed = false;
+        *x = 0;
+        *y = 0;
+    }
+#else
+    *pressed = false;
+    *x = 0;
+    *y = 0;
+#endif
+}
+
+/**
+ * @brief 检查 SPI 总线和触摸控制器是否已初始化
+ */
+bool spi_lcd_touch_is_bus_active(void)
+{
+    return (s_touch_io != NULL);
+}
+
+/**
+ * @brief 仅释放显示资源（LVGL + LCD 面板），保留触摸控制器和 SPI 总线
+ *        用于深度睡眠前：关闭显示省电，但保持 XPT2046 触摸监控以支持触摸唤醒。
+ */
+void spi_lcd_touch_deinit_display_only(void)
+{
+    ESP_LOGI(TAG, "Deinitializing display only (keeping touch controller)");
+
+    /* Delete LVGL display */
+    if (s_display) {
+        lv_display_delete(s_display);
+        s_display = NULL;
+    }
+
+    /* Delete LCD panel */
+    if (s_panel) {
+        esp_lcd_panel_del(s_panel);
+        s_panel = NULL;
+    }
+
+    /* Delete LCD panel IO */
+    if (s_panel_io) {
+        esp_lcd_panel_io_del(s_panel_io);
+        s_panel_io = NULL;
+    }
+
+    /* Delete semaphore */
+    if (s_lvgl_flush_sem) {
+        vSemaphoreDelete(s_lvgl_flush_sem);
+        s_lvgl_flush_sem = NULL;
+    }
+
+    /* 触摸控制器 (s_touch_handle) 和 touch IO (s_touch_io) 保留！ */
+    /* SPI 总线保留！ */
+}
+
+/**
  * @brief 释放 SPI LCD 全部资源，允许重新初始化
  */
 void spi_lcd_touch_deinit(void)
@@ -485,6 +574,12 @@ void spi_lcd_touch_deinit(void)
     if (s_panel_io) {
         esp_lcd_panel_io_del(s_panel_io);
         s_panel_io = NULL;
+    }
+
+    /* Delete touch controller */
+    if (s_touch_handle) {
+        esp_lcd_touch_del(s_touch_handle);
+        s_touch_handle = NULL;
     }
 
     /* Delete touch IO */

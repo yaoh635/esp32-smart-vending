@@ -6,7 +6,11 @@
  */
 
 #include "vending_machine.h"
+#include "voice_control.h"
 #include "driver/gpio.h"
+#include "driver/ledc.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "esp_log.h"
 
 static const char *TAG = "vending_machine";
@@ -16,6 +20,123 @@ static lv_disp_t *g_disp;                              /**< LVGL 显示句柄 */
 static vending_state_t g_state = STATE_PRODUCT_SELECT;  /**< 当前售货机状态 */
 static int g_selected = 0;                              /**< 当前选中的商品索引 */
 static int g_motor_gpio = VENDING_MOTOR_GPIO;           /**< 电机控制 GPIO 引脚 */
+
+/* ── 舵机控制 ── */
+static int g_servo_gpios[VENDING_SERVO_COUNT] = {-1, -1, -1, -1, -1}; /**< 舵机 GPIO 引脚 */
+static bool g_servo_initialized = false; /**< 舵机是否已初始化 */
+
+/* 舵机 PWM 参数（50Hz，0.5ms~2.5ms 对应 0°~180°） */
+#define SERVO_FREQ_HZ       50
+#define SERVO_TIMER         LEDC_TIMER_0
+#define SERVO_SPEED_MODE    LEDC_LOW_SPEED_MODE
+#define SERVO_MIN_PULSE_US  500    /* 0° = 0.5ms */
+#define SERVO_MAX_PULSE_US  2500   /* 180° = 2.5ms */
+#define SERVO_DEG_0         0      /* 初始位置 */
+#define SERVO_DEG_90        90     /* 出货位置 */
+
+/**
+ * @brief 将角度转换为 LEDC 占空比
+ *        0° = 0.5ms, 180° = 2.5ms, 周期 = 20ms (50Hz)
+ */
+static uint32_t servo_angle_to_duty(int angle)
+{
+    /* 限制角度范围 */
+    if (angle < 0) angle = 0;
+    if (angle > 180) angle = 180;
+
+    /* 计算脉宽（微秒） */
+    uint32_t pulse_us = SERVO_MIN_PULSE_US +
+                        (SERVO_MAX_PULSE_US - SERVO_MIN_PULSE_US) * angle / 180;
+
+    /* 转换为占空比（14位分辨率） */
+    uint32_t duty = (pulse_us * (1 << 14)) / 20000;  /* 20ms = 20000us */
+    return duty;
+}
+
+/**
+ * @brief 初始化舵机 PWM
+ */
+static esp_err_t servos_init(const int *gpio_pins, int count)
+{
+    ESP_LOGI(TAG, "Initializing %d servos", count);
+
+    /* 配置 LEDC 定时器 */
+    ledc_timer_config_t timer_cfg = {
+        .speed_mode = SERVO_SPEED_MODE,
+        .duty_resolution = LEDC_TIMER_14_BIT,
+        .timer_num = SERVO_TIMER,
+        .freq_hz = SERVO_FREQ_HZ,
+        .clk_cfg = LEDC_AUTO_CLK,
+    };
+    esp_err_t ret = ledc_timer_config(&timer_cfg);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "LEDC timer config failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    /* 配置每个舵机的 LEDC 通道 */
+    for (int i = 0; i < count; i++) {
+        if (gpio_pins[i] < 0) continue;
+
+        ledc_channel_config_t ch_cfg = {
+            .gpio_num = gpio_pins[i],
+            .speed_mode = SERVO_SPEED_MODE,
+            .channel = LEDC_CHANNEL_0 + i,
+            .timer_sel = SERVO_TIMER,
+            .duty = servo_angle_to_duty(SERVO_DEG_0),  /* 初始位置 0° */
+            .hpoint = 0,
+        };
+        ret = ledc_channel_config(&ch_cfg);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Servo %d (GPIO%d) config failed: %s",
+                     i, gpio_pins[i], esp_err_to_name(ret));
+            return ret;
+        }
+        ESP_LOGI(TAG, "Servo %d: GPIO%d initialized (0°)", i, gpio_pins[i]);
+    }
+
+    g_servo_initialized = true;
+    return ESP_OK;
+}
+
+/**
+ * @brief 设置舵机角度
+ */
+static void servo_set_angle(int servo_idx, int angle)
+{
+    if (!g_servo_initialized || servo_idx < 0 || servo_idx >= VENDING_SERVO_COUNT) {
+        return;
+    }
+    if (g_servo_gpios[servo_idx] < 0) return;
+
+    uint32_t duty = servo_angle_to_duty(angle);
+    ledc_set_duty(SERVO_SPEED_MODE, LEDC_CHANNEL_0 + servo_idx, duty);
+    ledc_update_duty(SERVO_SPEED_MODE, LEDC_CHANNEL_0 + servo_idx);
+
+    ESP_LOGI(TAG, "Servo %d (GPIO%d): %d° (duty=%lu)",
+             servo_idx, g_servo_gpios[servo_idx], angle, duty);
+}
+
+/**
+ * @brief 出货：转动对应商品的舵机
+ */
+static void dispense_product(int product_idx)
+{
+    if (product_idx < 0 || product_idx >= VENDING_SERVO_COUNT) {
+        ESP_LOGE(TAG, "Invalid product index: %d", product_idx);
+        return;
+    }
+
+    ESP_LOGI(TAG, "Dispensing product %d via servo %d (GPIO%d)",
+             product_idx, product_idx, g_servo_gpios[product_idx]);
+
+    /* 转到 90° 出货位置 */
+    servo_set_angle(product_idx, SERVO_DEG_90);
+
+    /* 1.5 秒后转回 0° */
+    vTaskDelay(pdMS_TO_TICKS(1500));
+    servo_set_angle(product_idx, SERVO_DEG_0);
+}
 
 /* ── 默认商品目录 ── */
 static const product_t default_products[VENDING_PRODUCT_COUNT] = {
@@ -39,6 +160,34 @@ static void create_order_confirm_screen(void);
 static void create_payment_screen(void);
 static void create_dispensing_screen(void);
 static void create_done_screen(void);
+
+/* ===================================================================
+ * 语音命令回调
+ * =================================================================== */
+/**
+ * @brief 语音命令回调函数
+ *        当检测到语音命令时，自动选择对应商品并跳转到确认界面
+ */
+static void voice_cmd_callback(int cmd_id, const char *product, void *user_data)
+{
+    (void)user_data;
+    (void)product;
+
+    /* 只在商品选择界面响应语音命令 */
+    if (g_state != STATE_PRODUCT_SELECT) {
+        ESP_LOGI(TAG, "Voice command ignored (state=%d)", g_state);
+        return;
+    }
+
+    int product_idx = voice_cmd_to_product_index(cmd_id);
+    if (product_idx >= 0 && product_idx < g_product_count) {
+        ESP_LOGI(TAG, "Voice selected product %d: %s", product_idx, g_products[product_idx].name);
+        g_selected = product_idx;
+        create_order_confirm_screen();
+    } else {
+        ESP_LOGW(TAG, "Unknown voice command: %d", cmd_id);
+    }
+}
 
 /* 定时器回调封装（lv_timer_cb_t 要求 lv_timer_t* 参数） */
 /**
@@ -337,24 +486,21 @@ static void create_payment_screen(void)
 }
 
 /* ===================================================================
- * 界面 D：出货（电机控制）
+ * 界面 D：出货（舵机控制）
  * =================================================================== */
 /**
- * @brief 关闭电机回调
- *        2 秒后关闭电机 GPIO，然后跳转到完成界面。
+ * @brief 出货完成回调
+ *        舵机已转回初始位置，跳转到完成界面。
  */
-static void motor_off_cb(lv_timer_t *timer)
+static void dispense_done_cb(lv_timer_t *timer)
 {
-    if (g_motor_gpio >= 0) {
-        gpio_set_level(g_motor_gpio, 0);
-    }
     lv_timer_delete(timer);
     create_done_screen();
 }
 
 /**
  * @brief 开始出货回调
- *        清除加载动画，显示"请取货"提示，激活电机，2 秒后关闭电机并跳转完成界面。
+ *        清除加载动画，显示"请取货"提示，激活对应商品的舵机出货。
  */
 static void dispense_start(lv_timer_t *timer)
 {
@@ -377,13 +523,11 @@ static void dispense_start(lv_timer_t *timer)
     lv_obj_set_style_text_align(msg, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(msg, LV_ALIGN_CENTER, 0, 30);
 
-    /* Activate motor */
-    if (g_motor_gpio >= 0) {
-        gpio_set_level(g_motor_gpio, 1);
-    }
+    /* 激活对应商品的舵机出货 */
+    dispense_product(g_selected);
 
-    /* Motor off after 2s, then go to done screen */
-    lv_timer_t *t = lv_timer_create(motor_off_cb, 2000, NULL);
+    /* 2 秒后跳转到完成界面 */
+    lv_timer_t *t = lv_timer_create(dispense_done_cb, 2000, NULL);
     lv_timer_set_repeat_count(t, 1);
 }
 
@@ -473,12 +617,13 @@ static void create_done_screen(void)
 
 /**
  * @brief 获取自动售货机默认配置
- *        返回包含默认电机 GPIO 和默认商品目录的配置结构体。
+ *        返回包含默认电机 GPIO、舵机 GPIO 和默认商品目录的配置结构体。
  */
 vending_machine_config_t vending_machine_get_default_config(void)
 {
     vending_machine_config_t config = {
         .motor_gpio = VENDING_MOTOR_GPIO,
+        .servo_gpios = {47, 27, 53, 46, 48},  /* 5个商品对应的舵机 GPIO */
         .products = default_products,
         .product_count = VENDING_PRODUCT_COUNT,
     };
@@ -487,7 +632,7 @@ vending_machine_config_t vending_machine_get_default_config(void)
 
 /**
  * @brief 初始化并启动自动售货机 UI
- *        保存显示句柄，应用配置（或使用默认值），初始化电机 GPIO，
+ *        保存显示句柄，应用配置（或使用默认值），初始化舵机 GPIO，
  *        然后创建商品选择界面启动完整的售货机交互流程。
  */
 esp_err_t vending_machine_start(lv_display_t *display,
@@ -503,6 +648,7 @@ esp_err_t vending_machine_start(lv_display_t *display,
     /* Apply configuration */
     if (config != NULL) {
         g_motor_gpio = config->motor_gpio;
+        memcpy(g_servo_gpios, config->servo_gpios, sizeof(g_servo_gpios));
         g_products = config->products;
         g_product_count = config->product_count;
         g_purchase_cb = config->purchase_cb;
@@ -510,26 +656,32 @@ esp_err_t vending_machine_start(lv_display_t *display,
     } else {
         /* Use defaults */
         g_motor_gpio = VENDING_MOTOR_GPIO;
+        g_servo_gpios[0] = 47;
+        g_servo_gpios[1] = 27;
+        g_servo_gpios[2] = 53;
+        g_servo_gpios[3] = 46;
+        g_servo_gpios[4] = 48;
         g_products = default_products;
         g_product_count = VENDING_PRODUCT_COUNT;
         g_purchase_cb = NULL;
         g_purchase_cb_user_data = NULL;
     }
 
-    /* Initialize motor GPIO if configured */
-    if (g_motor_gpio >= 0) {
-        ESP_LOGI(TAG, "Initialize motor GPIO %d", g_motor_gpio);
-        gpio_config_t motor_cfg = {
-            .mode = GPIO_MODE_OUTPUT,
-            .pin_bit_mask = 1ULL << g_motor_gpio,
-        };
-        ESP_ERROR_CHECK(gpio_config(&motor_cfg));
-        gpio_set_level(g_motor_gpio, 0);
+    /* Initialize servos */
+    esp_err_t ret = servos_init(g_servo_gpios, VENDING_SERVO_COUNT);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Servo initialization failed: %s", esp_err_to_name(ret));
+        return ret;
     }
 
     /* Start with product selection screen */
     ESP_LOGI(TAG, "Starting vending machine UI");
     create_product_select_screen();
+
+    /* 启动语音控制 */
+    voice_control_set_cb(voice_cmd_callback, NULL);
+    voice_control_start();
+    ESP_LOGI(TAG, "Voice control started");
 
     return ESP_OK;
 }
