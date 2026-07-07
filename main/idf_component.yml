@@ -2,4 +2,8 @@
 dependencies:
   ## Required IDF version
   idf:
-    version: '>=4.1.0'
+    version: '>=5.0'
+  ## ESP-SR for speech recognition
+  espressif/esp-sr: "^2.0.0"
+  ## Audio codec device framework
+  espressif/esp_codec_dev: "^1.0.0"

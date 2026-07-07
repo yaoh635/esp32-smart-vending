@@ -46,6 +46,7 @@ static volatile int s_display_buf_idx = -1;             /* 当前可供显示的
 static SemaphoreHandle_t s_frame_ready_sem = NULL;      /* 帧就绪信号量，用于通知显示任务 */
 static esp_cam_sensor_device_t *s_cam_sensor = NULL;    /* 传感器设备句柄 */
 static isp_proc_handle_t s_isp_proc = NULL;             /* ISP处理器句柄（用于deinit） */
+static i2c_master_bus_handle_t s_i2c_bus_handle = NULL; /* I2C总线句柄（供音频编解码器共享） */
 
 /* 帧缓冲区大小计算: 水平分辨率 × 垂直分辨率 × 每像素字节数 */
 #define FRAME_BUFFER_SIZE  (CAM_H_RES * CAM_V_RES * EXAMPLE_RGB565_BYTES_PER_PIXEL)
@@ -184,6 +185,7 @@ esp_err_t camera_init(esp_cam_ctlr_handle_t *cam_handle, esp_cam_ctlr_trans_t *t
     };
     i2c_master_bus_handle_t i2c_bus_handle = NULL;
     ESP_RETURN_ON_ERROR(i2c_new_master_bus(&i2c_bus_conf, &i2c_bus_handle), TAG, "I2C初始化失败");
+    s_i2c_bus_handle = i2c_bus_handle;  /* 保存供音频编解码器共享 */
 
     /* ========== 步骤5: 检测摄像头传感器 ========== */
     /* 遍历所有已注册的传感器驱动，尝试检测连接的摄像头 */
@@ -318,6 +320,11 @@ esp_err_t camera_start(esp_cam_ctlr_handle_t cam_handle)
 esp_cam_sensor_device_t *camera_get_sensor_handle(void)
 {
     return s_cam_sensor;
+}
+
+i2c_master_bus_handle_t camera_get_i2c_bus_handle(void)
+{
+    return s_i2c_bus_handle;
 }
 
 /**

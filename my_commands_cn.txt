@@ -1,0 +1,26 @@
+# 自定义中文语音指令
+# 格式: 指令ID,拼音
+# 注意: 拼音之间用空格分隔，不要用标点符号
+
+# 可乐
+1,wo xiang yao ke le
+2,wo yao ke le 
+3,ke le
+
+# 雪碧
+4,wo xiang yao xue bi
+5,wo yao xue bi 
+6,xue bi
+
+# 水
+7,wo xiang yao shui
+8,wo yao shui
+9,shui
+10,wo xiang yao kuang quan shui
+11,wo yao kuang quan shui
+12,kuang quan shui
+
+# 薯片
+13,wo xiang yao shu pian
+14,wo yao shu pian
+15,shu pian

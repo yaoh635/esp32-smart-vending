@@ -47,6 +47,10 @@ volatile int *camera_get_display_buf_idx_ptr(void);
 #include "esp_cam_sensor.h"
 esp_cam_sensor_device_t *camera_get_sensor_handle(void);
 
+/* I2C bus handle for sharing with audio codecs */
+#include "driver/i2c_master.h"
+i2c_master_bus_handle_t camera_get_i2c_bus_handle(void);
+
 #define CAM_H_RES   CONFIG_EXAMPLE_MIPI_CSI_DISP_HRES
 #define CAM_V_RES   CONFIG_EXAMPLE_MIPI_CSI_DISP_VRES
 

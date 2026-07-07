@@ -17,6 +17,10 @@ idf_component_register(SRCS ${srcs}
                            human_face_recognition
                            esp_driver_gpio
                            esp_timer
+                           voice_control
+                           esp-sr
+                           esp_codec_dev
+                           lvgl__lvgl
                        WHOLE_ARCHIVE)
 
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-attributes)

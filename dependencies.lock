@@ -2,77 +2,119 @@ dependencies:
   atanisoft/esp_lcd_touch_xpt2046:
     dependencies: []
     source:
-      path: components\managed_components\atanisoft__esp_lcd_touch_xpt2046
+      path: D:\wyz_work\esp\work_final\components\managed_components\atanisoft__esp_lcd_touch_xpt2046
       type: local
     version: 1.0.6
+  espressif/cjson:
+    component_hash: e788323270d90738662d66fffa910bfe1fba019bba087f01557e70c40485b469
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 1.7.19~2
   espressif/cmake_utilities:
     dependencies: []
     source:
-      path: components\managed_components\espressif__cmake_utilities
+      path: D:\wyz_work\esp\work_final\components\managed_components\espressif__cmake_utilities
       type: local
     version: 0.5.3
   espressif/dl_fft:
     dependencies: []
     source:
-      path: components\managed_components\espressif__dl_fft
+      path: D:\wyz_work\esp\work_final\components\managed_components\espressif__dl_fft
       type: local
     version: 0.4.0
   espressif/esp-dl:
     dependencies: []
     source:
-      path: components\managed_components\espressif__esp-dl
+      path: D:\wyz_work\esp\work_final\components\managed_components\espressif__esp-dl
       type: local
     version: 3.3.4
   espressif/esp-dsp:
     dependencies: []
     source:
-      path: components\managed_components\espressif__esp-dsp
+      path: D:\wyz_work\esp\work_final\components\managed_components\espressif__esp-dsp
       type: local
     version: 1.8.0
+  espressif/esp-sr:
+    component_hash: aa58d6a13a49600314a50a27240ccbd17e407f608216a3086d4868e0da2e8053
+    dependencies:
+    - name: espressif/cjson
+      registry_url: https://components.espressif.com
+      require: private
+      version: ^1.7.19
+    - name: espressif/dl_fft
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=0.2.0'
+    - name: espressif/esp-dsp
+      registry_url: https://components.espressif.com
+      require: private
+      version: 1.8.0
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 2.4.6
   espressif/esp_cam_sensor:
     dependencies: []
     source:
-      path: components\managed_components\espressif__esp_cam_sensor
+      path: D:\wyz_work\esp\work_final\components\managed_components\espressif__esp_cam_sensor
       type: local
     version: 1.7.0
+  espressif/esp_codec_dev:
+    component_hash: df70f10af8d7b922add7b9d07372c9c97ab356e58d72b7a892050227c2d44348
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.5.11
   espressif/esp_lcd_touch:
     dependencies: []
     source:
-      path: components\managed_components\espressif__esp_lcd_touch
+      path: D:\wyz_work\esp\work_final\components\managed_components\espressif__esp_lcd_touch
       type: local
     version: 1.2.1
   espressif/esp_lcd_touch_stmpe610:
     dependencies: []
     source:
-      path: components\managed_components\espressif__esp_lcd_touch_stmpe610
+      path: D:\wyz_work\esp\work_final\components\managed_components\espressif__esp_lcd_touch_stmpe610
       type: local
     version: 1.0.8
   espressif/esp_new_jpeg:
     dependencies: []
     source:
-      path: components\managed_components\espressif__esp_new_jpeg
+      path: D:\wyz_work\esp\work_final\components\managed_components\espressif__esp_new_jpeg
       type: local
     version: 1.0.1
   espressif/esp_sccb_intf:
     dependencies: []
     source:
-      path: components\managed_components\espressif__esp_sccb_intf
+      path: D:\wyz_work\esp\work_final\components\managed_components\espressif__esp_sccb_intf
       type: local
     version: 0.0.8
   espressif/human_face_detect:
     dependencies: []
     source:
-      path: components\managed_components\espressif__human_face_detect
+      path: D:\wyz_work\esp\work_final\components\managed_components\espressif__human_face_detect
       type: local
     version: 0.4.2
   idf:
     source:
       type: idf
-    version: 6.0.0
+    version: 5.5.4
   lvgl/lvgl:
     dependencies: []
     source:
-      path: components\managed_components\lvgl__lvgl
+      path: D:\wyz_work\esp\work_final\components\managed_components\lvgl__lvgl
       type: local
     version: 9.3.0
 direct_dependencies:
@@ -81,7 +123,9 @@ direct_dependencies:
 - espressif/dl_fft
 - espressif/esp-dl
 - espressif/esp-dsp
+- espressif/esp-sr
 - espressif/esp_cam_sensor
+- espressif/esp_codec_dev
 - espressif/esp_lcd_touch
 - espressif/esp_lcd_touch_stmpe610
 - espressif/esp_new_jpeg
@@ -89,6 +133,6 @@ direct_dependencies:
 - espressif/human_face_detect
 - idf
 - lvgl/lvgl
-manifest_hash: 8c8b87712dcf9cff21d24b09644e0dde810944a79c3796513c2d16a4c0a066a5
+manifest_hash: 7ca926d9514a86d4d27132bf9509407af46d8db3ce059a0a7cf4a818c4db782d
 target: esp32p4
-version: 3.0.0
+version: 2.0.0
