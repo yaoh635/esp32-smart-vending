@@ -303,6 +303,16 @@ esp_err_t spi_lcd_touch_init(const spi_lcd_touch_config_t *config,
             .max_transfer_sz = s_config.h_res * 80 * sizeof(uint16_t),
         };
         ESP_ERROR_CHECK(spi_bus_initialize(LCD_HOST, &buscfg, SPI_DMA_CH_AUTO));
+
+        /* Set GPIO drive strength to 40mA for all SPI pins */
+        gpio_set_drive_capability((gpio_num_t)s_config.sclk_gpio, GPIO_DRIVE_CAP_3);
+        gpio_set_drive_capability((gpio_num_t)s_config.mosi_gpio, GPIO_DRIVE_CAP_3);
+        if (s_config.miso_gpio >= 0) {
+            gpio_set_drive_capability((gpio_num_t)s_config.miso_gpio, GPIO_DRIVE_CAP_3);
+        }
+        gpio_set_drive_capability((gpio_num_t)s_config.lcd_dc_gpio, GPIO_DRIVE_CAP_3);
+        gpio_set_drive_capability((gpio_num_t)s_config.lcd_cs_gpio, GPIO_DRIVE_CAP_3);
+        ESP_LOGI(TAG, "SPI GPIO drive strength set to 40mA");
     } else {
         ESP_LOGI(TAG, "SPI bus already active, skipping initialization");
     }
@@ -399,6 +409,9 @@ esp_err_t spi_lcd_touch_init(const spi_lcd_touch_config_t *config,
 
         ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)LCD_HOST, &tp_io_config, &tp_io_handle));
         s_touch_io = tp_io_handle;
+
+        /* Set touch CS GPIO drive strength to 40mA */
+        gpio_set_drive_capability((gpio_num_t)s_config.touch_cs_gpio, GPIO_DRIVE_CAP_3);
 
         /* Configure touch INT pin as input */
         if (s_config.touch_int_gpio >= 0) {

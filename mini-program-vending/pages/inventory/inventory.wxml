@@ -1,0 +1,50 @@
+<view class="container">
+  <block wx:if="{{loading}}">
+    <view class="empty">加载中...</view>
+  </block>
+
+  <block wx:for="{{products}}" wx:key="name">
+    <view class="card">
+      <view class="product-header">
+        <view class="product-info">
+          <text class="product-name">{{item.name}}</text>
+          <text class="product-price">¥{{item.price}}</text>
+        </view>
+        <button class="btn-restock" size="mini" bindtap="openRestock" data-name="{{item.name}}">补货</button>
+      </view>
+
+      <view class="inv-stats">
+        <text>剩余 <text class="bold">{{item.remaining}}</text> / 总量 {{item.total}}</text>
+        <text>已售 <text class="bold">{{item.sold}}</text> 件</text>
+      </view>
+
+      <view class="inv-bar">
+        <view class="inv-fill" style="width:{{item.pct}}%;background:{{item.barColor}}"></view>
+      </view>
+      <text class="inv-pct">{{item.pct}}%</text>
+    </view>
+  </block>
+
+  <view wx:if="{{!loading && products.length === 0}}" class="empty">暂无库存数据</view>
+
+  <!-- 补货弹窗 -->
+  <view class="modal {{showModal ? 'show' : ''}}" catchtap="closeModal">
+    <view class="modal-box" catchtap="donothing">
+      <view class="modal-title">商品补货</view>
+      <view class="modal-row">
+        <text class="modal-label">商品</text>
+        <picker bindchange="onProductChange" value="{{restockProduct}}" range="{{products}}" range-key="name">
+          <view class="picker">{{restockProduct || '请选择'}}</view>
+        </picker>
+      </view>
+      <view class="modal-row">
+        <text class="modal-label">数量</text>
+        <input class="modal-input" type="number" value="{{restockCount}}" bindinput="onCountInput"/>
+      </view>
+      <view class="modal-btns">
+        <button size="mini" bindtap="closeModal">取消</button>
+        <button size="mini" type="primary" bindtap="doRestock">确认</button>
+      </view>
+    </view>
+  </view>
+</view>

@@ -9,4 +9,10 @@ sdkconfig
 __pycache__/
 sdkconfig.old
 .claude/
-CLAUDE.md
+dependencies.lock
+
+# Office temp files
+~$*.docx
+
+# Report temp files
+report_full_text.txt

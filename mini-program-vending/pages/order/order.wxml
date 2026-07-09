@@ -1,0 +1,49 @@
+<!-- 订单页（用户: 我的订单 / 管理员: 销售数据） -->
+<view class="container">
+  <!-- 管理员视图 -->
+  <block wx:if="{{isAdmin}}">
+    <view class="kpi-cards" wx:if="{{salesSummary}}">
+      <view class="kpi-card">
+        <text class="kpi-value">{{salesSummary.total_sales}}</text>
+        <text class="kpi-label">总销量</text>
+      </view>
+      <view class="kpi-card">
+        <text class="kpi-value">¥{{salesSummary.total_revenue}}</text>
+        <text class="kpi-label">总营收</text>
+      </view>
+      <view class="kpi-card">
+        <text class="kpi-value">{{salesSummary.total_users}}</text>
+        <text class="kpi-label">用户数</text>
+      </view>
+    </view>
+    <view class="sales-tips">
+      <text>📊 详细数据请查看「商品」页的畅销排行</text>
+    </view>
+  </block>
+
+  <!-- 用户视图：我的订单 -->
+  <block wx:else>
+    <view class="loading" wx:if="{{loading}}">
+      <text>加载中...</text>
+    </view>
+
+    <view class="order-list" wx:else>
+      <view class="order-item"
+            wx:for="{{orders}}" wx:key="order_id">
+        <view class="order-header">
+          <text class="order-product">{{item.product}}</text>
+          <text class="order-price">{{item.price}}</text>
+        </view>
+        <view class="order-footer">
+          <text class="order-time">{{item.time}}</text>
+          <text class="order-status shipped">已完成</text>
+        </view>
+      </view>
+
+      <view class="empty" wx:if="{{orders.length === 0}}">
+        <text>暂无订单</text>
+        <text class="empty-hint">去「商品」页选购吧</text>
+      </view>
+    </view>
+  </block>
+</view>

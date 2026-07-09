@@ -1,0 +1,69 @@
+<!-- 我的页 -->
+<view class="container">
+  <!-- 用户信息卡片 -->
+  <view class="user-card">
+    <view class="avatar">👤</view>
+    <view class="user-info">
+      <text class="user-name">{{isAdmin ? '管理员' : '用户'}}</text>
+      <text class="user-id">ID: {{machineId || '未绑定'}}</text>
+    </view>
+    <view class="role-badge {{isAdmin ? 'admin' : ''}}">
+      <text>{{isAdmin ? '管理员' : '用户'}}</text>
+    </view>
+  </view>
+
+  <!-- 功能菜单 -->
+  <view class="menu-section">
+    <view class="menu-title">设备管理</view>
+
+    <view class="menu-item" bindtap="onScanBind">
+      <text class="menu-icon">📷</text>
+      <text class="menu-text">扫码绑定售货机</text>
+      <text class="menu-arrow">›</text>
+    </view>
+
+    <view class="menu-item">
+      <text class="menu-icon">🌐</text>
+      <text class="menu-text">服务器地址</text>
+      <input class="server-input"
+             value="{{serverUrl}}"
+             placeholder="http://192.168.1.100"
+             bindinput="onServerInput"
+             bindblur="onSaveServer" />
+    </view>
+  </view>
+
+  <view class="menu-section">
+    <view class="menu-title">账户</view>
+
+    <view class="menu-item" bindtap="onFaceRegister">
+      <text class="menu-icon">😊</text>
+      <text class="menu-text">注册人脸</text>
+      <text class="menu-desc">用于刷脸支付</text>
+      <text class="menu-arrow">›</text>
+    </view>
+
+    <view class="menu-item" bindtap="onAdminLogin">
+      <text class="menu-icon">🔐</text>
+      <text class="menu-text">{{isAdmin ? '管理员菜单' : '管理员登录'}}</text>
+      <text class="menu-arrow">›</text>
+    </view>
+  </view>
+
+  <!-- 登录弹窗 -->
+  <view class="modal-mask" wx:if="{{showLoginModal}}">
+    <view class="modal-box">
+      <text class="modal-title">管理员登录</text>
+      <input class="modal-input"
+             type="password"
+             placeholder="请输入管理员密码"
+             value="{{loginPassword}}"
+             bindinput="onPasswordInput"
+             focus="{{showLoginModal}}" />
+      <view class="modal-btns">
+        <button class="btn-cancel" bindtap="onLoginCancel">取消</button>
+        <button class="btn-confirm" bindtap="onLoginConfirm">登录</button>
+      </view>
+    </view>
+  </view>
+</view>

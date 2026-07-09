@@ -3,6 +3,14 @@ CONFIG_FATFS_VFS_FSTAT_BLKSIZE=4096
 # PSRAM (required for camera frame buffers ~2.4MB)
 CONFIG_SPIRAM=y
 
+# WiFi + Web Server (via ESP-Hosted ESP32-C6)
+# Note: CONFIG_ESP_WIFI_ENABLED must NOT be set for ESP32-P4 (no native WiFi)
+# The esp_wifi_remote component handles WiFi through ESP-Hosted
+CONFIG_APP_WIFI_ENABLED=y
+CONFIG_APP_WIFI_SSID="myssid"
+CONFIG_APP_WIFI_PASSWORD="mypassword"
+CONFIG_APP_WIFI_MAX_RETRY=5
+
 # WDT: enable but don't panic, don't check idle tasks (prevents periodic reset)
 CONFIG_ESP_TASK_WDT_EN=y
 CONFIG_ESP_TASK_WDT_INIT=y

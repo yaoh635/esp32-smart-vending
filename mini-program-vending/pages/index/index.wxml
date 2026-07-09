@@ -1,0 +1,112 @@
+<!-- 首页（用户: 推荐 / 管理员: 仪表盘） -->
+<view class="container">
+
+  <!-- 未绑定提示条 -->
+  <view class="bind-banner" wx:if="{{!isBound && !isAdmin}}" bindtap="onGoBind">
+    <text>📷 点击绑定售货机，开始购物</text>
+    <text class="bind-arrow">›</text>
+  </view>
+
+  <!-- ====== 管理员视图：仪表盘 ====== -->
+  <block wx:if="{{isAdmin}}">
+    <!-- KPI 卡片 -->
+    <view class="kpi-grid">
+      <view class="kpi-card">
+        <text class="kpi-value">{{sales}}</text>
+        <text class="kpi-label">总销量</text>
+      </view>
+      <view class="kpi-card">
+        <text class="kpi-value">¥{{revenue}}</text>
+        <text class="kpi-label">总营收</text>
+      </view>
+      <view class="kpi-card">
+        <text class="kpi-value">{{todaySales}}</text>
+        <text class="kpi-label">今日</text>
+      </view>
+      <view class="kpi-card">
+        <text class="kpi-value">{{users}}</text>
+        <text class="kpi-label">用户</text>
+      </view>
+    </view>
+
+    <!-- 系统状态 -->
+    <view class="sys-row">
+      <view class="sys-item">
+        <text class="sys-label">运行时间</text>
+        <text class="sys-value">{{uptime}}</text>
+      </view>
+      <view class="sys-item">
+        <text class="sys-label">可用内存</text>
+        <text class="sys-value">{{heap}}</text>
+      </view>
+      <view class="sys-item">
+        <text class="sys-label">售货状态</text>
+        <text class="sys-value {{vendingActive ? 'active' : ''}}">
+          {{vendingActive ? '进行中' : '空闲'}}
+        </text>
+      </view>
+    </view>
+
+    <!-- 畅销排行 -->
+    <view class="section">
+      <text class="section-title">🔥 畅销排行</text>
+      <view class="rank-item" wx:for="{{ranking}}" wx:key="name">
+        <text class="rank-num">{{index + 1}}</text>
+        <text class="rank-name">{{item.name}}</text>
+        <text class="rank-sold">已售 {{item.sold}}</text>
+      </view>
+    </view>
+
+    <view class="update-time">
+      <text>更新于 {{lastUpdate}}</text>
+    </view>
+  </block>
+
+  <!-- ====== 用户视图：推荐 ====== -->
+  <block wx:else>
+    <view class="loading" wx:if="{{loading}}">
+      <text>加载中...</text>
+    </view>
+
+    <!-- 个性化推荐 -->
+    <view class="section" wx:if="{{recommendations.length > 0}}">
+      <text class="section-title">📌 猜你喜欢</text>
+      <view class="rec-scroll">
+        <view class="rec-card"
+              wx:for="{{recommendations}}" wx:key="product_name"
+              data-product="{{item}}"
+              bindtap="onProductTap">
+          <image class="rec-img" src="{{item.image}}" mode="aspectFill" />
+          <text class="rec-name">{{item.product_name}}</text>
+          <text class="rec-price">¥{{item.price}}</text>
+          <view class="rec-reason">
+            <text>{{item.reason}}</text>
+          </view>
+        </view>
+      </view>
+    </view>
+
+    <!-- 畅销商品 -->
+    <view class="section" wx:if="{{hotProducts.length > 0}}">
+      <text class="section-title">🔥 大家都在买</text>
+      <view class="hot-item"
+            wx:for="{{hotProducts}}" wx:key="name"
+            data-product="{{item}}"
+            bindtap="onProductTap">
+        <text class="hot-rank">{{index + 1}}</text>
+        <image class="hot-img" src="{{item.image}}" mode="aspectFill" />
+        <view class="hot-info">
+          <text class="hot-name">{{item.name}}</text>
+          <text class="hot-sold">已售 {{item.sold}} 件</text>
+        </view>
+        <text class="hot-price">¥{{item.price || '--'}}</text>
+      </view>
+    </view>
+
+    <!-- 空状态 -->
+    <view class="empty" wx:if="{{!loading && recommendations.length === 0 && hotProducts.length === 0}}">
+      <text>暂无推荐</text>
+      <text class="empty-hint">去「商品」页逛逛吧</text>
+    </view>
+  </block>
+</view>

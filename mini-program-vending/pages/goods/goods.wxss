@@ -1,0 +1,245 @@
+/* 商品浏览页样式 */
+.container {
+  padding: 16rpx;
+  background: #0f172a;
+  min-height: 100vh;
+}
+
+.search-bar {
+  display: flex;
+  align-items: center;
+  background: #1e293b;
+  border-radius: 16rpx;
+  padding: 16rpx 24rpx;
+  margin-bottom: 20rpx;
+}
+
+.search-input {
+  flex: 1;
+  color: #e2e8f0;
+  font-size: 28rpx;
+}
+
+.search-icon {
+  font-size: 32rpx;
+  margin-left: 12rpx;
+}
+
+.product-grid {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+}
+
+.product-card {
+  width: 48%;
+  background: #1e293b;
+  border-radius: 20rpx;
+  padding: 24rpx;
+  margin-bottom: 20rpx;
+  position: relative;
+  box-sizing: border-box;
+}
+
+.product-img {
+  width: 100%;
+  height: 240rpx;
+  border-radius: 12rpx;
+  margin-bottom: 16rpx;
+  background: #334155;
+}
+
+.product-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.product-name {
+  color: #f1f5f9;
+  font-size: 28rpx;
+  font-weight: bold;
+  margin-bottom: 8rpx;
+}
+
+.product-price {
+  color: #f59e0b;
+  font-size: 32rpx;
+  font-weight: bold;
+}
+
+.product-stock {
+  margin-top: 12rpx;
+  font-size: 22rpx;
+  padding: 4rpx 12rpx;
+  border-radius: 8rpx;
+  text-align: center;
+}
+
+.product-stock.good {
+  color: #10b981;
+  background: rgba(16, 185, 129, 0.15);
+}
+
+.product-stock.warn {
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.15);
+}
+
+.product-stock.out {
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.15);
+}
+
+.sold-badge {
+  position: absolute;
+  top: 12rpx;
+  right: 12rpx;
+  background: rgba(59, 130, 246, 0.2);
+  padding: 2rpx 10rpx;
+  border-radius: 6rpx;
+}
+
+.sold-badge text {
+  color: #60a5fa;
+  font-size: 20rpx;
+}
+
+.loading, .empty {
+  text-align: center;
+  padding: 80rpx 0;
+  color: #94a3b8;
+}
+
+.empty button {
+  margin-top: 24rpx;
+  background: #3b82f6;
+  color: white;
+}
+
+/* ── 管理员：库存管理 ── */
+.inv-item {
+  background: #1e293b;
+  border-radius: 16rpx;
+  padding: 24rpx;
+  margin-bottom: 16rpx;
+}
+
+.inv-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12rpx;
+}
+
+.inv-name {
+  color: #f1f5f9;
+  font-size: 30rpx;
+  font-weight: bold;
+}
+
+.inv-price {
+  color: #f59e0b;
+  font-size: 28rpx;
+}
+
+.inv-bar-wrap {
+  height: 14rpx;
+  background: #334155;
+  border-radius: 7rpx;
+  overflow: hidden;
+  margin-bottom: 12rpx;
+}
+
+.inv-bar {
+  height: 100%;
+  background: linear-gradient(90deg, #3b82f6, #60a5fa);
+  border-radius: 7rpx;
+  min-width: 4rpx;
+}
+
+.inv-footer {
+  display: flex;
+  align-items: center;
+  gap: 20rpx;
+}
+
+.inv-stock {
+  color: #94a3b8;
+  font-size: 24rpx;
+}
+
+.inv-sold {
+  color: #64748b;
+  font-size: 24rpx;
+  flex: 1;
+}
+
+.restock-btn {
+  background: rgba(59, 130, 246, 0.2);
+  padding: 8rpx 20rpx;
+  border-radius: 10rpx;
+}
+
+.restock-btn text {
+  color: #60a5fa;
+  font-size: 24rpx;
+}
+
+/* 补货弹窗 */
+.modal-mask {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.modal-box {
+  background: #1e293b;
+  border-radius: 24rpx;
+  padding: 40rpx;
+  width: 560rpx;
+}
+
+.modal-title {
+  color: #f1f5f9;
+  font-size: 32rpx;
+  font-weight: bold;
+  text-align: center;
+  display: block;
+  margin-bottom: 28rpx;
+}
+
+.modal-input {
+  background: #0f172a;
+  color: #f1f5f9;
+  border-radius: 12rpx;
+  padding: 20rpx;
+  margin-bottom: 28rpx;
+  font-size: 28rpx;
+}
+
+.modal-btns {
+  display: flex;
+  gap: 20rpx;
+}
+
+.btn-cancel, .btn-confirm {
+  flex: 1;
+  border-radius: 12rpx;
+  padding: 20rpx;
+  text-align: center;
+  font-size: 28rpx;
+}
+
+.btn-cancel {
+  background: #334155;
+  color: #94a3b8;
+}
+
+.btn-confirm {
+  background: #3b82f6;
+  color: white;
+}

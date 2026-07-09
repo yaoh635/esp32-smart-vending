@@ -38,6 +38,15 @@
 /* Voice Control (ESP-SR) */
 #include "voice_control.h"
 
+/* WiFi + Web Server (ESP-Hosted) */
+#include "wifi_init.h"
+#include "web_server.h"
+
+/* Inventory, Auth, Order (for mini-program REST API) */
+#include "inventory_manager.h"
+#include "admin_auth.h"
+#include "order_manager.h"
+
 static const char *TAG = "main";
 
 /* ── 全局管线对象（用于暂停/恢复） ── */
@@ -59,7 +68,7 @@ static TaskHandle_t s_start_vending_task_handle = NULL; /* 用于通知 UI 任�
 #define CAP_PRIORITY        6
 
 /* ── 深度睡眠参数 ── */
-#define IDLE_TIMEOUT_SEC    20          /* 无人脸 20 秒后进入深度睡眠 */
+#define IDLE_TIMEOUT_SEC    30          /* 无人脸 30 秒后重启系统 */
 #define TOUCH_WAKE_GPIO     2           /* 触摸中断引脚 (LP GPIO 2) */
 
 /* ── 空闲计时器 ── */
@@ -74,6 +83,9 @@ static void on_purchase_done(const char *product_name, const char *price_text, v
 static void on_face_detected(const who::detect::WhoDetect::result_t &result)
 {
     int face_count = result.det_res.size();
+
+    /* Update web server face count for status reporting */
+    web_server_set_face_count(face_count);
 
     if (face_count > 0 && !s_vending_active) {
         /* 重置空闲计时器 */
@@ -187,6 +199,10 @@ static void on_purchase_done(const char *product_name, const char *price_text, v
 
     /* 记录到 SD 卡 */
     face_id_purchase_callback(product_name, price_text, user_data);
+
+    /* 更新库存 */
+    inventory_sell_one(product_name);
+
     ESP_LOGI(TAG, ">>> Purchase callback done <<<");
 
     /* 通知 vending_ui_task 可以退出（非阻塞，可在任意上下文调用） */
@@ -287,6 +303,11 @@ static void enter_deep_sleep(void)
 {
     ESP_LOGI(TAG, "=== Entering deep sleep ===");
 
+    /* 0. 停止 Web 服务器 */
+#if CONFIG_APP_WIFI_ENABLED
+    web_server_stop();
+#endif
+
     /* 1. 停止摄像头和检测管线（释放硬件资源） */
     ESP_LOGI(TAG, "Stopping camera pipeline...");
     if (g_detector) {
@@ -345,9 +366,9 @@ static void enter_deep_sleep(void)
         ESP_LOGI(TAG, "EXT1 wakeup configured OK on GPIO %d", TOUCH_WAKE_GPIO);
     }
 
-    /* 保底：120 秒定时器唤醒（用于调试：确认系统能正常唤醒） */
-    esp_sleep_enable_timer_wakeup(120 * 1000 * 1000);
-    ESP_LOGI(TAG, "Timer fallback: 120s");
+    /* 定时器唤醒：10 秒后自动唤醒重启 */
+    esp_sleep_enable_timer_wakeup(IDLE_TIMEOUT_SEC * 1000 * 1000);
+    ESP_LOGI(TAG, "Timer wakeup: %ds", IDLE_TIMEOUT_SEC);
 
     /* 确认当前 GPIO 状态 */
     ESP_LOGI(TAG, "GPIO %d level before sleep: %d (expect 1=untouched, 0=touched)",
@@ -382,12 +403,11 @@ static void face_monitor_task(void *arg)
                 s_last_face_time_us = esp_timer_get_time();
             }
         } else {
-            /* 超时 — 检查是否超过空闲阈值 */
+            /* 超时 — 进入深度睡眠 */
             int64_t idle_sec = (esp_timer_get_time() - s_last_face_time_us) / 1000000;
             if (idle_sec >= IDLE_TIMEOUT_SEC && !s_vending_active) {
                 ESP_LOGI(TAG, "Idle for %lld seconds, entering deep sleep...", idle_sec);
                 enter_deep_sleep();
-                /* 不会执行到这里 */
             }
         }
     }
@@ -417,7 +437,7 @@ extern "C" void app_main(void)
     ESP_LOGI(TAG, "========================================");
 
     /* ── Step 0: SD 卡 + 人脸 ID 管理器 ── */
-    ESP_LOGI(TAG, "[0/4] Initializing SD card...");
+    ESP_LOGI(TAG, "[0/5] Initializing SD card...");
     esp_err_t ret = face_id_manager_init();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "SD card init FAILED (err=0x%x)! Purchases will NOT be logged.", ret);
@@ -425,13 +445,23 @@ extern "C" void app_main(void)
         ESP_LOGI(TAG, "SD card ready, %d faces registered", face_id_get_count());
     }
 
+    /* ── Step 0.5: 库存 + 认证 + 订单管理器 ── */
+    ESP_LOGI(TAG, "[0.5/5] Initializing inventory, auth, order...");
+    esp_err_t inv_ret = inventory_manager_init();
+    esp_err_t auth_ret = admin_auth_init();
+    esp_err_t order_ret = order_manager_init();
+    ESP_LOGI(TAG, "  Inventory: %s  Auth: %s  Order: %s",
+             inv_ret == ESP_OK ? "OK" : "FAIL",
+             auth_ret == ESP_OK ? "OK" : "FAIL",
+             order_ret == ESP_OK ? "OK" : "FAIL");
+
     /* ── Step 1: 同步原语 ── */
-    ESP_LOGI(TAG, "[1/4] Creating synchronization primitives...");
+    ESP_LOGI(TAG, "[1/5] Creating synchronization primitives...");
     s_face_detected_sem = xSemaphoreCreateBinary();
     assert(s_face_detected_sem);
 
     /* ── Step 2: 摄像头 + 人脸检测+识别管线 ── */
-    ESP_LOGI(TAG, "[2/4] Initializing camera and face recognition...");
+    ESP_LOGI(TAG, "[2/5] Initializing camera and face recognition...");
 
     /* 帧采集管线 */
     g_frame_cap = new who::frame_cap::WhoFrameCap();
@@ -459,11 +489,38 @@ extern "C" void app_main(void)
              DETECT_FPS, g_face_recognizer->get_num_feats());
 
     /* ── Step 3: 启动监控 ── */
-    ESP_LOGI(TAG, "[3/4] Starting face monitor...");
+    ESP_LOGI(TAG, "[3/5] Starting face monitor...");
     xTaskCreate(face_monitor_task, "face_monitor", 4 * 1024, NULL, 3, NULL);
+
+    /* ── Step 4: WiFi + Web Server (camera streaming) ── */
+#if CONFIG_APP_WIFI_ENABLED
+    ESP_LOGI(TAG, "[4/5] Initializing WiFi...");
+    if (wifi_init() == ESP_OK) {
+        char ip_str[16] = {0};
+        wifi_get_ip_str(ip_str, sizeof(ip_str));
+        ESP_LOGI(TAG, "WiFi connected, IP: %s", ip_str);
+
+        /* Start web server with camera stream */
+        static web_server_config_t ws_cfg;
+        ws_cfg.frame_cap_node = (void *)g_frame_cap->get_last_node();
+        ws_cfg.detector = (void *)g_detector;
+        ws_cfg.vending_active = &s_vending_active;
+        ws_cfg.cam_width = CAM_H_RES;
+        ws_cfg.cam_height = CAM_V_RES;
+
+        esp_err_t ws_ret = web_server_start(&ws_cfg);
+        if (ws_ret == ESP_OK) {
+            ESP_LOGI(TAG, "Web server: http://%s/", ip_str);
+        } else {
+            ESP_LOGE(TAG, "Web server start failed: %s", esp_err_to_name(ws_ret));
+        }
+    } else {
+        ESP_LOGW(TAG, "WiFi init failed, web server not started");
+    }
+#endif
 
     ESP_LOGI(TAG, "========================================");
     ESP_LOGI(TAG, "  System ready! Waiting for faces...");
-    ESP_LOGI(TAG, "  Idle timeout: %d sec (touch GPIO %d to wake)", IDLE_TIMEOUT_SEC, TOUCH_WAKE_GPIO);
+    ESP_LOGI(TAG, "  Idle timeout: %d sec → deep sleep → %ds timer wake", IDLE_TIMEOUT_SEC, IDLE_TIMEOUT_SEC);
     ESP_LOGI(TAG, "========================================");
 }

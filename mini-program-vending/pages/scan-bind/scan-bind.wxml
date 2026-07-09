@@ -1,0 +1,32 @@
+<!-- 扫码绑定售货机 -->
+<view class="container">
+  <view class="bind-card">
+    <text class="bind-icon">📷</text>
+    <text class="bind-title">扫码绑定售货机</text>
+    <text class="bind-desc">扫描售货机屏幕上的二维码</text>
+    <text class="bind-desc">或机身贴纸上的二维码</text>
+
+    <button class="scan-btn" bindtap="onScanBind">
+      打开扫一扫
+    </button>
+  </view>
+
+  <view class="manual-section" wx:if="{{isBound}}">
+    <text class="bind-status">✅ 已绑定: {{machineId}}</text>
+  </view>
+
+  <view class="manual-section">
+    <text class="manual-title">或手动输入</text>
+    <view class="url-input-row">
+      <input class="url-input"
+             value="{{serverUrl}}"
+             placeholder="http://192.168.1.x"
+             bindinput="onServerInput" />
+      <button class="save-btn" bindtap="onSaveServer">保存</button>
+    </view>
+  </view>
+
+  <button class="home-btn" bindtap="returnHome" wx:if="{{isBound}}">
+    返回首页
+  </button>
+</view>

@@ -32,7 +32,7 @@ static esp_netif_t *s_sta_netif = NULL;
 static int s_retry_num = 0;
 static char s_ip_str[16] = {0};
 
-#define MAXIMUM_RETRY  CONFIG_ESP_MAXIMUM_RETRY
+#define MAXIMUM_RETRY  CONFIG_APP_WIFI_MAX_RETRY
 
 /* ── WiFi + IP event handler ── */
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
@@ -119,8 +119,8 @@ esp_err_t wifi_init(void)
         },
     };
     /* Copy SSID and password from Kconfig */
-    strncpy((char *)wifi_config.sta.ssid, CONFIG_ESP_WIFI_SSID, sizeof(wifi_config.sta.ssid) - 1);
-    strncpy((char *)wifi_config.sta.password, CONFIG_ESP_WIFI_PASSWORD, sizeof(wifi_config.sta.password) - 1);
+    strncpy((char *)wifi_config.sta.ssid, CONFIG_APP_WIFI_SSID, sizeof(wifi_config.sta.ssid) - 1);
+    strncpy((char *)wifi_config.sta.password, CONFIG_APP_WIFI_PASSWORD, sizeof(wifi_config.sta.password) - 1);
 
     ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG, "WiFi set mode failed");
     ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_STA, &wifi_config), TAG, "WiFi set config failed");
@@ -128,7 +128,7 @@ esp_err_t wifi_init(void)
     /* ── 5. Start WiFi and wait for connection ── */
     s_wifi_event_group = xEventGroupCreate();
     ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "WiFi start failed");
-    ESP_LOGI(TAG, "Connecting to AP: %s", CONFIG_ESP_WIFI_SSID);
+    ESP_LOGI(TAG, "Connecting to AP: %s", CONFIG_APP_WIFI_SSID);
 
     /* Wait up to 15 seconds for WiFi connection (don't block forever) */
     EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
@@ -136,12 +136,12 @@ esp_err_t wifi_init(void)
         pdMS_TO_TICKS(15000));
 
     if (bits & WIFI_CONNECTED_BIT) {
-        ESP_LOGI(TAG, "Connected to %s, IP: %s", CONFIG_ESP_WIFI_SSID, s_ip_str);
+        ESP_LOGI(TAG, "Connected to %s, IP: %s", CONFIG_APP_WIFI_SSID, s_ip_str);
         return ESP_OK;
     }
 
     if (bits & WIFI_FAIL_BIT) {
-        ESP_LOGE(TAG, "Failed to connect to %s after %d retries", CONFIG_ESP_WIFI_SSID, MAXIMUM_RETRY);
+        ESP_LOGE(TAG, "Failed to connect to %s after %d retries", CONFIG_APP_WIFI_SSID, MAXIMUM_RETRY);
     } else {
         ESP_LOGE(TAG, "WiFi connection timeout (15s)");
     }

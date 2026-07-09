@@ -39,6 +39,12 @@ esp_err_t web_server_start(const web_server_config_t *config);
  */
 esp_err_t web_server_stop(void);
 
+/**
+ * @brief Update face count for status reporting
+ * @param count  Current number of detected faces
+ */
+void web_server_set_face_count(int count);
+
 #ifdef __cplusplus
 }
 #endif

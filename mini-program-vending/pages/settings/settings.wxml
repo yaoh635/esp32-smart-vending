@@ -1,0 +1,53 @@
+<view class="container">
+  <!-- 服务器地址 -->
+  <view class="card">
+    <view class="card-title">🔗 售货机地址</view>
+    <view class="input-row">
+      <input class="url-input" placeholder="http://192.168.1.100" value="{{serverUrl}}" bindinput="onUrlInput"/>
+      <button class="btn-save" size="mini" bindtap="saveUrl">保存</button>
+    </view>
+    <view class="input-row" style="margin-top:8px">
+      <button class="btn-test" size="mini" bindtap="testConnection" loading="{{testing}}">测试连接</button>
+      <text wx:if="{{connected}}" style="color:#22c55e;font-size:0.85em">✓ 已连接</text>
+      <text wx:elif="{{!connected && testing === false && systemInfo !== null}}" style="color:#ef4444;font-size:0.85em">✗ 连接失败</text>
+    </view>
+  </view>
+
+  <!-- 系统信息（连接成功后显示） -->
+  <view wx:if="{{systemInfo}}" class="card">
+    <view class="card-title">📊 设备信息</view>
+    <view class="info-row">
+      <text class="info-label">运行时间</text>
+      <text>{{systemInfo.uptimeStr}}</text>
+    </view>
+    <view class="info-row">
+      <text class="info-label">可用内存</text>
+      <text>{{systemInfo.heapKB}} KB</text>
+    </view>
+    <view class="info-row">
+      <text class="info-label">注册用户</text>
+      <text>{{systemInfo.faces_registered || 0}} 人</text>
+    </view>
+    <view class="info-row">
+      <text class="info-label">售卖状态</text>
+      <text class="{{systemInfo.vending_active ? 'warn' : 'ok'}}">{{systemInfo.vending_active ? '售卖中' : '空闲'}}</text>
+    </view>
+  </view>
+
+  <!-- 关于 -->
+  <view class="card">
+    <view class="card-title">ℹ️ 关于</view>
+    <view class="info-row">
+      <text class="info-label">版本</text>
+      <text>1.0.0</text>
+    </view>
+    <view class="info-row">
+      <text class="info-label">平台</text>
+      <text>ESP32-P4 智能售货机</text>
+    </view>
+    <view style="color:#64748b;font-size:0.8em;margin-top:8px">
+      配套项目：esp32-smart-vending<br/>
+      数据来自售货机 SD 卡 CSV 日志
+    </view>
+  </view>
+</view>

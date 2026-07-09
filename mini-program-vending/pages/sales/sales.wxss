@@ -1,0 +1,25 @@
+.container { padding: 12px; }
+.tabs { display: flex; margin-bottom: 12px; background: #1e293b; border-radius: 8px; overflow: hidden; }
+.tab { flex: 1; text-align: center; padding: 10px; font-size: 0.9em; color: #94a3b8; }
+.tab.active { color: #3b82f6; background: rgba(59,130,246,.1); border-bottom: 2px solid #3b82f6; }
+
+.card { background: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 12px; margin-bottom: 8px; }
+
+.sale-row { display: flex; justify-content: space-between; align-items: center; }
+.sale-product { font-weight: 600; display: block; }
+.sale-meta { color: #94a3b8; font-size: 0.8em; }
+.sale-time { color: #64748b; font-size: 0.78em; flex-shrink: 0; }
+
+.rank-row { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.rank-num { width: 22px; text-align: center; font-weight: 700; color: #94a3b8; font-size: 1em; }
+.rank-num.top1 { color: #fbbf24; }
+.rank-num.top2 { color: #94a3b8; }
+.rank-num.top3 { color: #cd853f; }
+.rank-info { flex: 1; }
+.rank-name { font-weight: 600; display: block; }
+.rank-sub { color: #94a3b8; font-size: 0.78em; }
+.rank-sold { font-weight: 700; color: #3b82f6; }
+.rank-bar-wrap { height: 6px; background: #334155; border-radius: 3px; overflow: hidden; }
+.rank-bar { height: 100%; background: #3b82f6; border-radius: 3px; }
+
+.empty { color: #475569; text-align: center; padding: 40px 0; }
