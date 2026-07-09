@@ -174,3 +174,36 @@ menu "SD/MMC Example Configuration"
             Please read the schematic first and input your LDO ID.
 
 endmenu
+
+menu "WiFi Configuration"
+
+    config APP_WIFI_ENABLED
+        bool "Enable WiFi and web server"
+        default y
+        help
+            Enable ESP-Hosted WiFi and HTTP camera streaming server.
+            Requires ESP32-C6 co-processor connected via SDIO.
+
+    config APP_WIFI_SSID
+        string "WiFi SSID"
+        default "myssid"
+        depends on APP_WIFI_ENABLED
+        help
+            SSID (network name) to connect to.
+
+    config APP_WIFI_PASSWORD
+        string "WiFi Password"
+        default "mypassword"
+        depends on APP_WIFI_ENABLED
+        help
+            WiFi password (WPA2-PSK).
+
+    config APP_WIFI_MAX_RETRY
+        int "Maximum WiFi retry attempts"
+        default 5
+        range 1 100
+        depends on APP_WIFI_ENABLED
+        help
+            Number of connection retries before giving up.
+
+endmenu

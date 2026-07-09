@@ -1,0 +1,14 @@
+.container { padding: 12px; }
+.card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 14px; margin-bottom: 12px; }
+.card-title { font-size: 0.9em; font-weight: 600; color: #94a3b8; margin-bottom: 10px; }
+
+.input-row { display: flex; align-items: center; gap: 8px; }
+.url-input { flex: 1; background: #0f172a; color: #e2e8f0; border: 1px solid #475569; border-radius: 6px; padding: 8px 10px; font-size: 0.9em; }
+.btn-save { background: #3b82f6; color: #fff; border: none; }
+.btn-test { background: #334155; color: #e2e8f0; border: 1px solid #475569; }
+
+.info-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #1f2937; font-size: 0.88em; }
+.info-row:last-child { border-bottom: none; }
+.info-label { color: #94a3b8; }
+.warn { color: #f59e0b; }
+.ok { color: #22c55e; }

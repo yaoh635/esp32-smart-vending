@@ -1,0 +1,69 @@
+<!-- 商品浏览页（用户）/ 库存管理（管理员） -->
+<view class="container">
+  <view class="loading" wx:if="{{loading}}">
+    <text>加载中...</text>
+  </view>
+
+  <!-- ====== 用户视图：商品 ====== -->
+  <block wx:if="{{!isAdmin}}">
+    <view class="product-grid">
+      <view class="product-card"
+            wx:for="{{products}}" wx:key="name"
+            data-product="{{item}}"
+            bindtap="onProductTap">
+        <image class="product-img" src="{{item.image}}" mode="aspectFill" />
+        <view class="product-info">
+          <text class="product-name">{{item.name}}</text>
+          <text class="product-price">¥{{item.price}}</text>
+        </view>
+        <view class="product-stock {{item.stockClass}}">
+          <text>{{item.stockStatus}}</text>
+        </view>
+        <view class="sold-badge" wx:if="{{item.sold > 0}}">
+          <text>已售 {{item.sold}}</text>
+        </view>
+      </view>
+    </view>
+  </block>
+
+  <!-- ====== 管理员视图：库存管理 ====== -->
+  <block wx:else>
+    <view class="inv-item"
+          wx:for="{{products}}" wx:key="name">
+      <view class="inv-header">
+        <text class="inv-name">{{item.name}}</text>
+        <text class="inv-price">¥{{item.price}}</text>
+      </view>
+      <view class="inv-bar-wrap">
+        <view class="inv-bar" style="width: {{item.total > 0 ? item.stock / item.total * 100 : 0}}%"></view>
+      </view>
+      <view class="inv-footer">
+        <text class="inv-stock">库存: {{item.stock}} / {{item.total}}</text>
+        <text class="inv-sold">已售: {{item.sold}}</text>
+        <view class="restock-btn" data-name="{{item.name}}" bindtap="onRestockTap">
+          <text>+ 补货</text>
+        </view>
+      </view>
+    </view>
+  </block>
+
+  <!-- 空状态 -->
+  <view class="empty" wx:if="{{!loading && products.length === 0}}">
+    <text>暂无商品</text>
+  </view>
+
+  <!-- 补货弹窗 -->
+  <view class="modal-mask" wx:if="{{showRestockModal}}">
+    <view class="modal-box">
+      <text class="modal-title">补货: {{restockProduct}}</text>
+      <input class="modal-input" type="number"
+             value="{{restockCount}}"
+             placeholder="输入数量"
+             bindinput="onRestockCountInput" />
+      <view class="modal-btns">
+        <button class="btn-cancel" bindtap="onRestockCancel">取消</button>
+        <button class="btn-confirm" bindtap="onRestockConfirm">确认</button>
+      </view>
+    </view>
+  </view>
+</view>

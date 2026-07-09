@@ -1,0 +1,47 @@
+<view class="container">
+  <!-- Tab 切换 -->
+  <view class="tabs">
+    <view class="tab {{activeTab === 'history' ? 'active' : ''}}" bindtap="switchTab" data-tab="history">交易记录</view>
+    <view class="tab {{activeTab === 'ranking' ? 'active' : ''}}" bindtap="switchTab" data-tab="ranking">畅销排行</view>
+  </view>
+
+  <block wx:if="{{loading}}">
+    <view class="empty">加载中...</view>
+  </block>
+
+  <!-- 交易记录 -->
+  <view wx:if="{{activeTab === 'history'}}">
+    <block wx:for="{{history}}" wx:key="index">
+      <view class="card">
+        <view class="sale-row">
+          <view class="sale-info">
+            <text class="sale-product">{{item.product}}</text>
+            <text class="sale-meta">{{item.user_name || '用户#' + item.user}} · {{item.price}}</text>
+          </view>
+          <text class="sale-time">{{fmtTime(item.time)}}</text>
+        </view>
+      </view>
+    </block>
+    <view wx:if="{{history.length === 0}}" class="empty">暂无交易记录</view>
+  </view>
+
+  <!-- 畅销排行 -->
+  <view wx:if="{{activeTab === 'ranking'}}">
+    <block wx:for="{{ranking}}" wx:key="name">
+      <view class="card">
+        <view class="rank-row">
+          <text class="rank-num {{index < 3 ? 'top' + (index + 1) : ''}}">{{index + 1}}</text>
+          <view class="rank-info">
+            <text class="rank-name">{{item.name}}</text>
+            <text class="rank-sub">营收: ${{item.revenueFmt}}</text>
+          </view>
+          <text class="rank-sold">{{item.sold}} 件</text>
+        </view>
+        <view class="rank-bar-wrap">
+          <view class="rank-bar" style="width:{{ranking[0].sold > 0 ? item.sold / ranking[0].sold * 100 : 0}}%"></view>
+        </view>
+      </view>
+    </block>
+    <view wx:if="{{ranking.length === 0}}" class="empty">暂无销售数据</view>
+  </view>
+</view>

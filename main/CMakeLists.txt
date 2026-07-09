@@ -1,4 +1,4 @@
-set(srcs "main.cpp")
+set(srcs "main.cpp" "web_server.cpp" "wifi_init.c" "jpeg_encoder.c")
 
 idf_component_register(SRCS ${srcs}
                        INCLUDE_DIRS "."
@@ -21,6 +21,15 @@ idf_component_register(SRCS ${srcs}
                            esp-sr
                            esp_codec_dev
                            lvgl__lvgl
+                           esp_http_server
+                           esp_wifi
+                           esp_hosted
+                           esp_new_jpeg
+                           nvs_flash
+                           esp_netif
+                           inventory_manager
+                           order_manager
+                           admin_auth
                        WHOLE_ARCHIVE)
 
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-attributes)

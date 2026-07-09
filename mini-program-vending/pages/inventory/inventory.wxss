@@ -1,0 +1,22 @@
+.container { padding: 12px; }
+.card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 14px; margin-bottom: 10px; }
+.product-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.product-name { font-size: 1em; font-weight: 600; }
+.product-price { font-size: 0.85em; color: #f59e0b; margin-left: 8px; }
+.btn-restock { background: #3b82f6; color: #fff; border: none; font-size: 0.8em; }
+.inv-stats { display: flex; justify-content: space-between; font-size: 0.82em; color: #94a3b8; margin-bottom: 6px; }
+.bold { color: #e2e8f0; font-weight: 600; }
+.inv-bar { height: 16px; background: #334155; border-radius: 8px; overflow: hidden; margin-bottom: 4px; }
+.inv-fill { height: 100%; border-radius: 8px; transition: width 0.5s; }
+.inv-pct { font-size: 0.78em; color: #94a3b8; }
+.empty { color: #475569; text-align: center; padding: 40px 0; }
+
+.modal { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,.6); z-index: 100; align-items: center; justify-content: center; }
+.modal.show { display: flex; }
+.modal-box { background: #1e293b; border: 1px solid #475569; border-radius: 12px; padding: 20px; width: 85%; max-width: 340px; }
+.modal-title { font-size: 1em; font-weight: 600; margin-bottom: 12px; }
+.modal-row { margin-bottom: 10px; }
+.modal-label { color: #94a3b8; font-size: 0.85em; display: block; margin-bottom: 4px; }
+.modal-input { background: #0f172a; color: #e2e8f0; border: 1px solid #475569; border-radius: 6px; padding: 6px 10px; font-size: 0.9em; }
+.picker { background: #0f172a; color: #e2e8f0; border: 1px solid #475569; border-radius: 6px; padding: 8px 10px; font-size: 0.9em; }
+.modal-btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }

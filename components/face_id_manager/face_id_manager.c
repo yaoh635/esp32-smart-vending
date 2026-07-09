@@ -28,13 +28,12 @@ static bool s_initialized = false;
 static int s_next_id = 1;
 static int s_current_user_id = -1;
 
-/* SDMMC pin configuration (matching sdkconfig) */
-#define SDMMC_PIN_CLK   43
-#define SDMMC_PIN_CMD   44
-#define SDMMC_PIN_D0    39
-#define SDMMC_PIN_D1    40
-#define SDMMC_PIN_D2    41
-#define SDMMC_PIN_D3    42
+/*
+ * SDMMC Slot 0 on ESP32-P4 uses IOMUX with fixed pins:
+ * CLK=43, CMD=44, D0=39, D1=40, D2=41, D3=42
+ * No GPIO matrix routing needed — pins are hardwired to slot 0.
+ * Slot 1 (GPIO matrix) is reserved for ESP-Hosted (ESP32-C6 SDIO).
+ */
 
 esp_err_t face_id_manager_init(void)
 {
@@ -52,8 +51,9 @@ esp_err_t face_id_manager_init(void)
         .allocation_unit_size = 16 * 1024,
     };
 
-    /* Host config */
+    /* Host config — use Slot 0 (IOMUX, fixed pins 43/44/39-42) */
     sdmmc_host_t host = SDMMC_HOST_DEFAULT();
+    host.slot = SDMMC_HOST_SLOT_0;  /* Slot 1 reserved for ESP-Hosted SDIO */
     esp_err_t ret;
 
     /* LDO power control for SD card */
@@ -85,15 +85,9 @@ esp_err_t face_id_manager_init(void)
     ESP_LOGI(TAG, "Card power reset done (GPIO %d)", CONFIG_EXAMPLE_PIN_CARD_POWER_RESET);
 #endif
 
-    /* Slot config */
+    /* Slot config — Slot 0 IOMUX pins are fixed, no GPIO matrix routing needed */
     sdmmc_slot_config_t slot_config = SDMMC_SLOT_CONFIG_DEFAULT();
     slot_config.width = 4;
-    slot_config.clk = SDMMC_PIN_CLK;
-    slot_config.cmd = SDMMC_PIN_CMD;
-    slot_config.d0  = SDMMC_PIN_D0;
-    slot_config.d1  = SDMMC_PIN_D1;
-    slot_config.d2  = SDMMC_PIN_D2;
-    slot_config.d3  = SDMMC_PIN_D3;
     slot_config.flags |= SDMMC_SLOT_FLAG_INTERNAL_PULLUP;
 
     /* Mount SD card */
