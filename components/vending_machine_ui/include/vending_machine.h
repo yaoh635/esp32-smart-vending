@@ -97,6 +97,12 @@ esp_err_t vending_machine_start(lv_display_t *display,
  */
 vending_state_t vending_machine_get_state(void);
 
+/**
+ * @brief 停止售货机 UI，禁用所有定时器回调
+ *        在销毁 LCD 之前必须调用，防止定时器访问已销毁对象。
+ */
+void vending_machine_stop(void);
+
 #ifdef __cplusplus
 }
 #endif

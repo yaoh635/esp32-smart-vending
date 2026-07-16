@@ -28,6 +28,13 @@ esp_err_t esp_board_init(int sample_rate, int channels, int bits_per_sample,
                          i2c_master_bus_handle_t i2c_bus);
 
 /**
+ * @brief 释放音频硬件资源
+ *        释放 I2S 通道、I2C 设备句柄、音频编解码器设备
+ * @return ESP_OK 成功
+ */
+esp_err_t esp_board_deinit(void);
+
+/**
  * @brief 获取音频采集通道数
  */
 int esp_get_feed_channel(void);
