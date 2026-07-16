@@ -15,7 +15,7 @@ menu "MIPI Camera Configuration"
 
     choice EXAMPLE_MIPI_CSI_DISP_HRES
         bool "MIPI CSI horizontal resolution"
-        default EXAMPLE_MIPI_CSI_HRES_1024
+        default EXAMPLE_MIPI_CSI_HRES_800
 
         config EXAMPLE_MIPI_CSI_HRES_800
             bool "800"
@@ -30,7 +30,7 @@ menu "MIPI Camera Configuration"
 
     choice EXAMPLE_MIPI_CSI_DISP_VRES
         bool "MIPI CSI vertical resolution"
-        default EXAMPLE_MIPI_CSI_VRES_600
+        default EXAMPLE_MIPI_CSI_VRES_800
 
         config EXAMPLE_MIPI_CSI_VRES_600
             bool "600"

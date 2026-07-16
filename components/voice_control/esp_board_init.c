@@ -50,6 +50,7 @@ static esp_codec_dev_handle_t s_mic_dev = NULL;
 /* I2S handles */
 static i2s_chan_handle_t s_i2s_tx_chan = NULL;
 static i2s_chan_handle_t s_i2s_rx_chan = NULL;
+static bool s_i2s_enabled = false;  /* I2S 是否已启用 */
 
 /* I2C handles */
 static i2c_master_bus_handle_t s_i2c_bus = NULL;
@@ -188,16 +189,22 @@ esp_err_t esp_board_init(int sample_rate, int channels, int bits_per_sample,
         return ret;
     }
 
-    /* 初始化 I2S */
+    /* 初始化 I2S（复用已存在的通道或创建新通道） */
     ESP_LOGI(TAG, "I2S: MCLK=GPIO%d, BCLK=GPIO%d, WS=GPIO%d, DOUT=GPIO%d, DIN=GPIO%d",
              BSP_I2S_MCLK, BSP_I2S_SCLK, BSP_I2S_WS, BSP_I2S_DOUT, BSP_I2S_DIN);
 
-    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_PORT, I2S_ROLE_MASTER);
-    chan_cfg.auto_clear = true;
-    ret = i2s_new_channel(&chan_cfg, &s_i2s_tx_chan, &s_i2s_rx_chan);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "I2S channel creation failed: %s", esp_err_to_name(ret));
-        return ret;
+    if (s_i2s_tx_chan == NULL || s_i2s_rx_chan == NULL) {
+        /* 首次初始化：创建新通道 */
+        i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_PORT, I2S_ROLE_MASTER);
+        chan_cfg.auto_clear = true;
+        ret = i2s_new_channel(&chan_cfg, &s_i2s_tx_chan, &s_i2s_rx_chan);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "I2S channel creation failed: %s", esp_err_to_name(ret));
+            return ret;
+        }
+        ESP_LOGI(TAG, "I2S channels created");
+    } else {
+        ESP_LOGI(TAG, "Reusing existing I2S channels");
     }
 
     i2s_std_config_t std_cfg = {
@@ -234,6 +241,7 @@ esp_err_t esp_board_init(int sample_rate, int channels, int bits_per_sample,
     ret = i2s_channel_enable(s_i2s_rx_chan);
     if (ret != ESP_OK) return ret;
 
+    s_i2s_enabled = true;
     ESP_LOGI(TAG, "I2S enabled");
     vTaskDelay(pdMS_TO_TICKS(50));
 
@@ -316,6 +324,57 @@ esp_err_t esp_board_init(int sample_rate, int channels, int bits_per_sample,
     }
 
     ESP_LOGI(TAG, "Audio hardware initialized");
+    return ESP_OK;
+}
+
+esp_err_t esp_board_deinit(void)
+{
+    if (!s_i2s_enabled) {
+        ESP_LOGW(TAG, "Audio hardware not initialized, skipping deinit");
+        return ESP_OK;
+    }
+
+    ESP_LOGI(TAG, "Deinitializing audio hardware...");
+
+    /* 关闭并释放音频编解码器设备 */
+    if (s_speaker_dev) {
+        esp_codec_dev_close(s_speaker_dev);
+        esp_codec_dev_delete(s_speaker_dev);
+        s_speaker_dev = NULL;
+        ESP_LOGI(TAG, "Speaker device released");
+    }
+    if (s_mic_dev) {
+        esp_codec_dev_close(s_mic_dev);
+        esp_codec_dev_delete(s_mic_dev);
+        s_mic_dev = NULL;
+        ESP_LOGI(TAG, "Microphone device released");
+    }
+
+    /* 禁用 I2S 通道（不删除，避免驱动内部状态不一致） */
+    if (s_i2s_tx_chan) {
+        i2s_channel_disable(s_i2s_tx_chan);
+        ESP_LOGI(TAG, "I2S TX channel disabled");
+    }
+    if (s_i2s_rx_chan) {
+        i2s_channel_disable(s_i2s_rx_chan);
+        ESP_LOGI(TAG, "I2S RX channel disabled");
+    }
+
+    /* 释放 I2C 设备句柄（不释放共享的 I2C 总线） */
+    if (s_es8311_dev) {
+        i2c_master_bus_rm_device(s_es8311_dev);
+        s_es8311_dev = NULL;
+    }
+    if (s_es7210_dev) {
+        i2c_master_bus_rm_device(s_es7210_dev);
+        s_es7210_dev = NULL;
+    }
+
+    /* 关闭 PA */
+    gpio_set_level(BSP_PA_CTRL, 0);
+
+    s_i2s_enabled = false;
+    ESP_LOGI(TAG, "Audio hardware deinitialized");
     return ESP_OK;
 }
 

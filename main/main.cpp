@@ -13,7 +13,6 @@
 #include "freertos/semphr.h"
 #include "esp_log.h"
 #include "esp_timer.h"
-#include "esp_sleep.h"
 #include "driver/gpio.h"
 
 /* Camera & Frame Capture */
@@ -54,6 +53,10 @@ static who::frame_cap::WhoFrameCap *g_frame_cap = NULL;
 static who::detect::WhoDetect *g_detector = NULL;
 static HumanFaceRecognizer *g_face_recognizer = NULL;  /* 人脸识别器 */
 
+/* ── LCD 显示（只初始化一次） ── */
+static lv_display_t *g_lcd_display = NULL;
+static bool g_lcd_initialized = false;
+
 /* ── 同步原语 ── */
 static SemaphoreHandle_t s_face_detected_sem = NULL;
 static volatile bool s_vending_active = false;
@@ -66,13 +69,6 @@ static TaskHandle_t s_start_vending_task_handle = NULL; /* 用于通知 UI 任�
 #define DETECT_PRIORITY     5
 #define CAP_STACK_SIZE      (4 * 1024)
 #define CAP_PRIORITY        6
-
-/* ── 深度睡眠参数 ── */
-#define IDLE_TIMEOUT_SEC    30          /* 无人脸 30 秒后重启系统 */
-#define TOUCH_WAKE_GPIO     2           /* 触摸中断引脚 (LP GPIO 2) */
-
-/* ── 空闲计时器 ── */
-static int64_t s_last_face_time_us = 0;  /* 上次检测到人脸的时间戳 */
 
 /* Forward declarations */
 static void on_purchase_done(const char *product_name, const char *price_text, void *user_data);
@@ -88,8 +84,6 @@ static void on_face_detected(const who::detect::WhoDetect::result_t &result)
     web_server_set_face_count(face_count);
 
     if (face_count > 0 && !s_vending_active) {
-        /* 重置空闲计时器 */
-        s_last_face_time_us = esp_timer_get_time();
         /* 在当前帧同步执行人脸识别 */
         if (g_face_recognizer) {
             int db_count = g_face_recognizer->get_num_feats();
@@ -155,6 +149,7 @@ static void vending_ui_task(void *arg)
         s_vending_ui_task_handle = NULL;
         s_vending_active = false;
         /* 通知 start_vending_machine 可以退出 */
+        
         if (s_start_vending_task_handle) {
             xTaskNotifyGive(s_start_vending_task_handle);
         }
@@ -172,7 +167,7 @@ static void vending_ui_task(void *arg)
     /* 阻塞等待购买完成通知（由 on_purchase_done 回调发送） */
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
-    /* 购买完成后额外等待几秒显示感谢界面 */
+    /* 购买完成后等待感谢界面显示完毕 */
     vTaskDelay(pdMS_TO_TICKS(3000));
 
     ESP_LOGI(TAG, "Vending cycle complete");
@@ -241,23 +236,33 @@ static void start_vending_machine(void)
                  esp_err_to_name(vc_ret));
     }
 
-    /* 3. 初始化 SPI LCD + Touch */
-    ESP_LOGI(TAG, "Initializing SPI LCD + Touch...");
-    lv_display_t *display = NULL;
-    spi_lcd_touch_config_t lcd_cfg = spi_lcd_touch_get_default_config();
-    lcd_cfg.touch_enabled = true;
+    /* 3. 初始化 SPI LCD + Touch（仅首次） */
+    if (!g_lcd_initialized) {
+        ESP_LOGI(TAG, "Initializing SPI LCD + Touch...");
+        spi_lcd_touch_config_t lcd_cfg = spi_lcd_touch_get_default_config();
+        lcd_cfg.touch_enabled = true;
 
-    esp_err_t ret = spi_lcd_touch_init(&lcd_cfg, &display);
-    if (ret != ESP_OK || display == NULL) {
-        ESP_LOGE(TAG, "Failed to init SPI LCD: %s", esp_err_to_name(ret));
-        s_vending_active = false;
-        /* LCD 失败，恢复检测 */
-        voice_control_stop();
-        if (g_frame_cap) g_frame_cap->resume();
-        if (g_detector) g_detector->resume();
-        return;
+        esp_err_t ret = spi_lcd_touch_init(&lcd_cfg, &g_lcd_display);
+        if (ret != ESP_OK || g_lcd_display == NULL) {
+            ESP_LOGE(TAG, "Failed to init SPI LCD: %s", esp_err_to_name(ret));
+            s_vending_active = false;
+            /* LCD 失败，恢复检测 */
+            voice_control_stop();
+            if (g_frame_cap) g_frame_cap->resume();
+            if (g_detector) g_detector->resume();
+            return;
+        }
+        g_lcd_initialized = true;
+        ESP_LOGI(TAG, "SPI LCD initialized");
+    } else {
+        ESP_LOGI(TAG, "Reusing existing SPI LCD");
+        /* 打开背光 */
+        gpio_config_t bk_cfg = {};
+        bk_cfg.mode = GPIO_MODE_OUTPUT;
+        bk_cfg.pin_bit_mask = 1ULL << CONFIG_SPI_LCD_TOUCH_BK_LIGHT_GPIO;
+        gpio_config(&bk_cfg);
+        gpio_set_level((gpio_num_t)CONFIG_SPI_LCD_TOUCH_BK_LIGHT_GPIO, 1);
     }
-    ESP_LOGI(TAG, "SPI LCD ready");
 
     /* 4. 用户已在识别回调中设置，直接获取 */
     int user_id = face_id_get_current_user();
@@ -269,114 +274,33 @@ static void start_vending_machine(void)
 
     /* 5. 启动售货机 UI 任务 */
     s_start_vending_task_handle = xTaskGetCurrentTaskHandle();
-    xTaskCreate(vending_ui_task, "vending_ui", 16 * 1024, display, 4, NULL);
+    xTaskCreate(vending_ui_task, "vending_ui", 16 * 1024, g_lcd_display, 4, NULL);
 
     /* 6. 阻塞等待 UI 任务完成通知 */
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     s_start_vending_task_handle = NULL;
 
-    /* 7. 停止语音控制 */
+    /* 7. 停止售货机 UI（禁用定时器回调，防止访问已销毁对象） */
+    vending_machine_stop();
+
+    /* 8. 停止语音控制（释放 I2S 资源） */
     voice_control_stop();
 
-    /* 8. 关闭 LCD 背光并释放显示资源 */
+    /* 9. 关闭 LCD 背光（不释放 LCD 资源，下次复用） */
     ESP_LOGI(TAG, "Turning off LCD backlight...");
     gpio_config_t bk_cfg = {};
     bk_cfg.mode = GPIO_MODE_OUTPUT;
     bk_cfg.pin_bit_mask = 1ULL << CONFIG_SPI_LCD_TOUCH_BK_LIGHT_GPIO;
     gpio_config(&bk_cfg);
     gpio_set_level((gpio_num_t)CONFIG_SPI_LCD_TOUCH_BK_LIGHT_GPIO, 0);
-    spi_lcd_touch_deinit();
 
     ESP_LOGI(TAG, "Resuming face detection pipeline...");
 
-    /* 9. 恢复检测管线 */
+    /* 10. 恢复检测管线 */
     if (g_frame_cap) g_frame_cap->resume();
     if (g_detector) g_detector->resume();
 
     ESP_LOGI(TAG, "=== Face detection resumed ===");
-}
-
-/* ===================================================================
- * 进入深度睡眠
- * =================================================================== */
-static void enter_deep_sleep(void)
-{
-    ESP_LOGI(TAG, "=== Entering deep sleep ===");
-
-    /* 0. 停止 Web 服务器 */
-#if CONFIG_APP_WIFI_ENABLED
-    web_server_stop();
-#endif
-
-    /* 1. 停止摄像头和检测管线（释放硬件资源） */
-    ESP_LOGI(TAG, "Stopping camera pipeline...");
-    if (g_detector) {
-        g_detector->stop();
-    }
-    if (g_frame_cap) {
-        g_frame_cap->stop();
-    }
-    g_detector = NULL;
-    g_frame_cap = NULL;
-    camera_deinit();  /* 释放 ISP 硬件 */
-    vTaskDelay(pdMS_TO_TICKS(500));  /* 等待硬件完全释放 */
-
-    /* 2. 配置电源域：RTC 域保持供电（内部上拉需要） */
-    esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
-
-    /* 3. 关闭 LCD 背光 */
-    gpio_config_t bk_cfg = {};
-    bk_cfg.mode = GPIO_MODE_OUTPUT;
-    bk_cfg.pin_bit_mask = 1ULL << CONFIG_SPI_LCD_TOUCH_BK_LIGHT_GPIO;
-    gpio_config(&bk_cfg);
-    gpio_set_level((gpio_num_t)CONFIG_SPI_LCD_TOUCH_BK_LIGHT_GPIO, 0);
-
-    /* 4. 仅释放显示资源，保留触摸控制器和 SPI 总线（支持触摸唤醒） */
-    spi_lcd_touch_deinit_display_only();
-
-    /* 5. 配置触摸中断引脚为输入+上拉（确保未触摸时为高电平） */
-    ESP_LOGI(TAG, "Configuring GPIO %d with pull-up...", TOUCH_WAKE_GPIO);
-    gpio_config_t touch_cfg = {};
-    touch_cfg.pin_bit_mask = 1ULL << TOUCH_WAKE_GPIO;
-    touch_cfg.mode = GPIO_MODE_INPUT;
-    touch_cfg.pull_up_en = GPIO_PULLUP_ENABLE;
-    touch_cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
-    touch_cfg.intr_type = GPIO_INTR_DISABLE;
-    gpio_config(&touch_cfg);
-
-    /* 等待 GPIO 变为高电平（触摸释放），最多等 5 秒 */
-    for (int i = 0; i < 50; i++) {
-        if (gpio_get_level((gpio_num_t)TOUCH_WAKE_GPIO) == 1) {
-            ESP_LOGI(TAG, "Touch released");
-            break;
-        }
-        vTaskDelay(pdMS_TO_TICKS(100));
-    }
-
-    /* 6. 配置唤醒源：GPIO 2（触摸中断）低电平唤醒 + 定时器保底 */
-    ESP_LOGI(TAG, "Wake source: GPIO %d (touch interrupt, low level)", TOUCH_WAKE_GPIO);
-
-    esp_err_t wake_err = esp_sleep_enable_ext1_wakeup(
-        1ULL << TOUCH_WAKE_GPIO,
-        ESP_EXT1_WAKEUP_ANY_LOW
-    );
-    if (wake_err != ESP_OK) {
-        ESP_LOGE(TAG, "EXT1 wakeup config FAILED: %s (0x%x)", esp_err_to_name(wake_err), wake_err);
-    } else {
-        ESP_LOGI(TAG, "EXT1 wakeup configured OK on GPIO %d", TOUCH_WAKE_GPIO);
-    }
-
-    /* 定时器唤醒：10 秒后自动唤醒重启 */
-    esp_sleep_enable_timer_wakeup(IDLE_TIMEOUT_SEC * 1000 * 1000);
-    ESP_LOGI(TAG, "Timer wakeup: %ds", IDLE_TIMEOUT_SEC);
-
-    /* 确认当前 GPIO 状态 */
-    ESP_LOGI(TAG, "GPIO %d level before sleep: %d (expect 1=untouched, 0=touched)",
-             TOUCH_WAKE_GPIO, gpio_get_level((gpio_num_t)TOUCH_WAKE_GPIO));
-
-    /* 进入深度睡眠 */
-    ESP_LOGI(TAG, "Goodbye! Touch GPIO %d to wake.", TOUCH_WAKE_GPIO);
-    esp_deep_sleep_start();
 }
 
 /* ===================================================================
@@ -386,29 +310,13 @@ static void face_monitor_task(void *arg)
 {
     (void)arg;
 
-    /* 初始化空闲计时器 */
-    s_last_face_time_us = esp_timer_get_time();
-
     while (1) {
-        /* 等待人脸检测信号，超时后检查是否需要休眠 */
+        /* 等待人脸检测信号 */
         BaseType_t got_signal = xSemaphoreTake(s_face_detected_sem,
                                                 pdMS_TO_TICKS(5000));
 
-        if (got_signal == pdTRUE) {
-            /* 检测到人脸，更新时间戳，启动售货机 */
-            s_last_face_time_us = esp_timer_get_time();
-            if (!s_vending_active) {
-                start_vending_machine();
-                /* 售货机完成后重置计时器 */
-                s_last_face_time_us = esp_timer_get_time();
-            }
-        } else {
-            /* 超时 — 进入深度睡眠 */
-            int64_t idle_sec = (esp_timer_get_time() - s_last_face_time_us) / 1000000;
-            if (idle_sec >= IDLE_TIMEOUT_SEC && !s_vending_active) {
-                ESP_LOGI(TAG, "Idle for %lld seconds, entering deep sleep...", idle_sec);
-                enter_deep_sleep();
-            }
+        if (got_signal == pdTRUE && !s_vending_active) {
+            start_vending_machine();
         }
     }
 }
@@ -420,20 +328,6 @@ extern "C" void app_main(void)
 {
     ESP_LOGI(TAG, "========================================");
     ESP_LOGI(TAG, "  Smart Vending Machine Starting...");
-
-    /* 检查唤醒原因 (v5.5.4 API) */
-    esp_sleep_source_t wakeup_cause = esp_sleep_get_wakeup_cause();
-    ESP_LOGI(TAG, "  Wakeup cause: %d", (int)wakeup_cause);
-    if (wakeup_cause == ESP_SLEEP_WAKEUP_EXT1) {
-        uint64_t ext1_status = esp_sleep_get_ext1_wakeup_status();
-        ESP_LOGI(TAG, "  Wakeup: EXT1 (status=0x%llx, GPIO %d)", ext1_status, TOUCH_WAKE_GPIO);
-        /* 等待触摸释放，防止立即重新进入睡眠 */
-        vTaskDelay(pdMS_TO_TICKS(500));
-    } else if (wakeup_cause == ESP_SLEEP_WAKEUP_TIMER) {
-        ESP_LOGI(TAG, "  Wakeup: Timer (120s fallback)");
-    } else {
-        ESP_LOGI(TAG, "  Wakeup: Cold boot");
-    }
     ESP_LOGI(TAG, "========================================");
 
     /* ── Step 0: SD 卡 + 人脸 ID 管理器 ── */
@@ -477,13 +371,37 @@ extern "C" void app_main(void)
     /* 人脸检测器 */
     auto *last_node = g_frame_cap->get_last_node();
     g_detector = new who::detect::WhoDetect("face_detect", last_node);
-    g_detector->set_model(new HumanFaceDetect(HumanFaceDetect::MSRMNP_S8_V1));
+
+    /* 降低检测阈值，提高暗光/模糊环境下的检测率 */
+    auto *detect_model = new HumanFaceDetect(HumanFaceDetect::MSRMNP_S8_V1);
+    detect_model->set_score_thr(0.3f, 0);  /* MSR阶段: 0.5→0.3 */
+    detect_model->set_score_thr(0.3f, 1);  /* MNP阶段: 0.5→0.3 */
+    detect_model->set_nms_thr(0.4f, 0);    /* MSR NMS: 0.5→0.4 */
+    detect_model->set_nms_thr(0.4f, 1);    /* MNP NMS: 0.5→0.4 */
+    g_detector->set_model(detect_model);
+
     g_detector->set_fps(DETECT_FPS);
     g_detector->set_detect_result_cb(on_face_detected);
     g_detector->run(DETECT_STACK_SIZE, DETECT_PRIORITY, 1);
 
     /* 人脸识别器（独立于检测，同步调用） */
+    /* 检查特征数据库是否损坏（特征数远大于用户数说明损坏） */
+    int user_count = face_id_get_count();
+    ESP_LOGI(TAG, "Face DB check: %d users registered", user_count);
+
     g_face_recognizer = new HumanFaceRecognizer("/sdcard/face_feat_db.bin");
+    int feat_count = g_face_recognizer->get_num_feats();
+
+    /* 如果特征数超过用户数的3倍（允许同一用户多次注册），删除重建 */
+    if (feat_count > 0 && user_count > 0 && feat_count > (user_count * 3 + 10)) {
+        ESP_LOGW(TAG, "Face feature DB corrupted! feats=%d, users=%d. Rebuilding...",
+                 feat_count, user_count);
+        delete g_face_recognizer;
+        remove("/sdcard/face_feat_db.bin");
+        g_face_recognizer = new HumanFaceRecognizer("/sdcard/face_feat_db.bin");
+        feat_count = g_face_recognizer->get_num_feats();
+        ESP_LOGI(TAG, "Face feature DB rebuilt, now has %d feats", feat_count);
+    }
 
     ESP_LOGI(TAG, "Face recognition started (FPS=%.1f, %d faces in DB)",
              DETECT_FPS, g_face_recognizer->get_num_feats());
@@ -521,6 +439,5 @@ extern "C" void app_main(void)
 
     ESP_LOGI(TAG, "========================================");
     ESP_LOGI(TAG, "  System ready! Waiting for faces...");
-    ESP_LOGI(TAG, "  Idle timeout: %d sec → deep sleep → %ds timer wake", IDLE_TIMEOUT_SEC, IDLE_TIMEOUT_SEC);
     ESP_LOGI(TAG, "========================================");
 }

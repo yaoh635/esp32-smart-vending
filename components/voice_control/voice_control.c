@@ -242,8 +242,8 @@ esp_err_t voice_control_stop(void)
     ESP_LOGI(TAG, "Stopping voice detection...");
     s_task_flag = 0;
 
-    /* 等待任务退出 */
-    vTaskDelay(pdMS_TO_TICKS(500));
+    /* 等待任务自行退出（任务会调用 vTaskDelete(NULL)） */
+    vTaskDelay(pdMS_TO_TICKS(1000));
 
     s_feed_task = NULL;
     s_detect_task = NULL;
@@ -253,6 +253,12 @@ esp_err_t voice_control_stop(void)
         s_afe_handle->destroy(s_afe_data);
         s_afe_data = NULL;
     }
+
+    /* 等待 AFE 资源完全释放 */
+    vTaskDelay(pdMS_TO_TICKS(500));
+
+    /* 释放音频硬件资源（I2S、I2C 设备、编解码器） */
+    esp_board_deinit();
 
     ESP_LOGI(TAG, "Voice control stopped");
     return ESP_OK;

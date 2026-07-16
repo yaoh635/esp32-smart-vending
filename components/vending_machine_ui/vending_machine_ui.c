@@ -20,6 +20,7 @@ static lv_disp_t *g_disp;                              /**< LVGL 显示句柄 */
 static vending_state_t g_state = STATE_PRODUCT_SELECT;  /**< 当前售货机状态 */
 static int g_selected = 0;                              /**< 当前选中的商品索引 */
 static int g_motor_gpio = VENDING_MOTOR_GPIO;           /**< 电机控制 GPIO 引脚 */
+static volatile bool g_stopping = false;                /**< 正在停止标志，防止定时器回调访问已销毁对象 */
 
 /* ── 舵机控制 ── */
 static int g_servo_gpios[VENDING_SERVO_COUNT] = {-1, -1, -1, -1, -1}; /**< 舵机 GPIO 引脚 */
@@ -193,7 +194,7 @@ static void voice_cmd_callback(int cmd_id, const char *product, void *user_data)
 /**
  * @brief 定时器回调：跳转到出货界面
  */
-static void to_dispensing_cb(lv_timer_t *t) { lv_timer_delete(t); create_dispensing_screen(); }
+static void to_dispensing_cb(lv_timer_t *t) { lv_timer_delete(t); if (!g_stopping) create_dispensing_screen(); }
 
 /**
  * @brief 安全切换屏幕
@@ -432,6 +433,7 @@ static void payment_success_show(lv_timer_t *timer)
 {
     lv_obj_t *scr = lv_timer_get_user_data(timer);
     lv_timer_delete(timer);
+    if (g_stopping) return;
 
     /* Clear spinner area */
     lv_obj_clean(scr);
@@ -495,7 +497,7 @@ static void create_payment_screen(void)
 static void dispense_done_cb(lv_timer_t *timer)
 {
     lv_timer_delete(timer);
-    create_done_screen();
+    if (!g_stopping) create_done_screen();
 }
 
 /**
@@ -506,6 +508,7 @@ static void dispense_start(lv_timer_t *timer)
 {
     lv_obj_t *scr = lv_timer_get_user_data(timer);
     lv_timer_delete(timer);
+    if (g_stopping) return;
 
     /* Update UI */
     lv_obj_clean(scr);
@@ -571,7 +574,7 @@ static void create_dispensing_screen(void)
 static void done_return_cb(lv_timer_t *timer)
 {
     lv_timer_delete(timer);
-    create_product_select_screen();
+    if (!g_stopping) create_product_select_screen();
 }
 
 /**
@@ -644,6 +647,7 @@ esp_err_t vending_machine_start(lv_display_t *display,
     }
 
     g_disp = display;
+    g_stopping = false;  /* 重置停止标志 */
 
     /* Apply configuration */
     if (config != NULL) {
@@ -693,4 +697,14 @@ esp_err_t vending_machine_start(lv_display_t *display,
 vending_state_t vending_machine_get_state(void)
 {
     return g_state;
+}
+
+/**
+ * @brief 停止售货机 UI，清除所有定时器回调
+ *        在销毁 LCD 之前必须调用，防止定时器访问已销毁对象。
+ */
+void vending_machine_stop(void)
+{
+    g_stopping = true;
+    ESP_LOGI(TAG, "Vending machine stopping (timers disabled)");
 }

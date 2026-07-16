@@ -18,6 +18,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include "sdkconfig.h"
 #include "esp_log.h"
 #include "esp_cache.h"
@@ -26,6 +27,11 @@
 #include "driver/i2c_master.h"
 #include "driver/isp.h"
 #include "driver/isp_demosaic.h"
+#include "driver/isp_ccm.h"
+#include "driver/isp_color.h"
+#include "driver/isp_sharpen.h"
+#include "driver/isp_bf.h"
+#include "driver/isp_gamma.h"
 #include "esp_cam_ctlr_csi.h"
 #include "esp_cam_ctlr.h"
 #include "esp_cam_sensor.h"
@@ -37,6 +43,13 @@
 #include "camera.h"
 
 static const char *TAG = "camera";
+
+/* Gamma=0.6 伽马校正函数：y = 256 * (x/256)^0.6，适度提亮暗部 */
+static uint32_t gamma_brighten(uint32_t x)
+{
+    if (x >= 256) return 256;
+    return (uint32_t)(256.0 * pow((double)x / 256.0, 0.6));
+}
 
 /* ==================== 双缓冲机制 ==================== */
 /* 使用两个缓冲区交替存储帧数据，实现无缝帧切换 */
@@ -160,7 +173,7 @@ esp_err_t camera_init(esp_cam_ctlr_handle_t *cam_handle, esp_cam_ctlr_trans_t *t
     /* ========== 步骤3: 分配双缓冲区(PSRAM) ========== */
     /* 使用64字节对齐，确保DMA访问效率 */
     for (int i = 0; i < 2; i++) {
-        s_frame_buffers[i] = heap_caps_aligned_calloc(64, 1, FRAME_BUFFER_SIZE, MALLOC_CAP_SPIRAM);
+        s_frame_buffers[i] = heap_caps_aligned_calloc(128, 1, FRAME_BUFFER_SIZE, MALLOC_CAP_SPIRAM);
         assert(s_frame_buffers[i]);
         /* 清零缓冲区 */
         memset(s_frame_buffers[i], 0x00, FRAME_BUFFER_SIZE);
@@ -236,6 +249,28 @@ esp_err_t camera_init(esp_cam_ctlr_handle_t *cam_handle, esp_cam_ctlr_trans_t *t
     ESP_RETURN_ON_ERROR(esp_cam_sensor_set_format(cam, cam_cur_fmt), TAG, "设置格式失败");
     ESP_LOGI(TAG, "当前格式: %s", cam_cur_fmt->name);
 
+    /* ========== 步骤6.5: 调整传感器寄存器 - 适度提高画面亮度 ========== */
+    /* 必须在启动数据流之前写入，否则会导致帧输出异常 */
+    esp_cam_sensor_reg_val_t ae_regs[] = {
+        /* AE 目标亮度：略高于默认 */
+        {.regaddr = 0x3A0F, .value = 0x68},  /* AE target high (默认0x58) */
+        {.regaddr = 0x3A10, .value = 0x60},  /* AE target low  (默认0x50) */
+        {.regaddr = 0x3A1B, .value = 0x68},  /* AE target high fast */
+        {.regaddr = 0x3A1E, .value = 0x60},  /* AE target low fast */
+        {.regaddr = 0x3A11, .value = 0x70},  /* AE fast high threshold (默认0x60) */
+        {.regaddr = 0x3A1F, .value = 0x28},  /* AE fast low threshold  (默认0x28) */
+        /* 增益上限：24x（平衡亮度和噪点） */
+        {.regaddr = 0x3A18, .value = 0x01},  /* gain ceiling high */
+        {.regaddr = 0x3A19, .value = 0xC0},  /* gain ceiling low */
+    };
+    for (int i = 0; i < sizeof(ae_regs)/sizeof(ae_regs[0]); i++) {
+        esp_err_t reg_ret = esp_cam_sensor_ioctl(cam, ESP_CAM_SENSOR_IOC_S_REG, &ae_regs[i]);
+        if (reg_ret != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to write reg 0x%04X: %s", ae_regs[i].regaddr, esp_err_to_name(reg_ret));
+        }
+    }
+    ESP_LOGI(TAG, "OV5647 AE target adjusted (0x68/0x60), gain ceiling 24x");
+
     /* ========== 步骤7: 启动传感器数据流 ========== */
     int enable_flag = 1;
     ESP_RETURN_ON_ERROR(esp_cam_sensor_ioctl(cam, ESP_CAM_SENSOR_IOC_S_STREAM, &enable_flag),
@@ -300,7 +335,94 @@ esp_err_t camera_init(esp_cam_ctlr_handle_t *cam_handle, esp_cam_ctlr_trans_t *t
     ESP_RETURN_ON_ERROR(esp_isp_demosaic_configure(s_isp_proc, &demosaic_config), TAG, "去马赛克配置失败");
     ESP_RETURN_ON_ERROR(esp_isp_demosaic_enable(s_isp_proc), TAG, "去马赛克使能失败");
 
-    ESP_LOGI(TAG, "摄像头初始化完成 (%dx%d RAW8 -> RGB565)", CAM_H_RES, CAM_V_RES);
+    /* ========== 步骤11-15: ISP增强模块（逐个启用，不支持的自动跳过） ========== */
+    int isp_enhanced = 0;
+
+    /* CCM: 颜色校正矩阵 - 还原真实色彩 */
+    esp_isp_ccm_config_t ccm_config = {
+        .matrix = {
+            { 2.0000, -0.5459, -0.4541},
+            {-0.4751,  1.7696, -0.2945},
+            {-0.2002, -0.7998,  2.0000},
+        },
+        .saturation = true,
+        .flags = {.update_once_configured = 1},
+    };
+    if (esp_isp_ccm_configure(s_isp_proc, &ccm_config) == ESP_OK &&
+        esp_isp_ccm_enable(s_isp_proc) == ESP_OK) {
+        ESP_LOGI(TAG, "CCM enabled (OV5647 default matrix)");
+        isp_enhanced++;
+    } else {
+        ESP_LOGW(TAG, "CCM not supported on this chip, skipping");
+    }
+
+    /* Color: 亮度/对比度/饱和度 */
+    esp_isp_color_config_t color_config = {
+        .color_brightness = 35,    /* 亮度 +35 (适度提亮，避免过曝) */
+        .color_contrast = {.integer = 0, .decimal = 108},  /* 对比度 0.85 */
+        .color_saturation = {.integer = 0, .decimal = 102}, /* 饱和度 0.8 */
+        .color_hue = 0,
+        .flags = {.update_once_configured = 1},
+    };
+    if (esp_isp_color_configure(s_isp_proc, &color_config) == ESP_OK &&
+        esp_isp_color_enable(s_isp_proc) == ESP_OK) {
+        ESP_LOGI(TAG, "Color enabled (bright=+35 contrast=0.85 sat=0.8)");
+        isp_enhanced++;
+    } else {
+        ESP_LOGW(TAG, "Color not supported on this chip, skipping");
+    }
+
+    /* Sharpen: 锐化 - 适度锐化避免噪点放大 */
+    esp_isp_sharpen_config_t sharpen_config = {
+        .h_freq_coeff = {.integer = 0, .decimal = 80},   /* 0.31 (补偿固定焦距模糊) */
+        .m_freq_coeff = {.integer = 0, .decimal = 120},  /* 0.47 */
+        .h_thresh = 100,          /* 只锐化最强边缘 */
+        .l_thresh = 30,
+        .padding_mode = 0,
+        .padding_data = 0,
+        .sharpen_template = {{1,2,1},{2,2,2},{1,2,1}},
+        .padding_line_tail_valid_start_pixel = 0,
+        .padding_line_tail_valid_end_pixel = 0,
+        .flags = {.update_once_configured = 1},
+    };
+    if (esp_isp_sharpen_configure(s_isp_proc, &sharpen_config) == ESP_OK &&
+        esp_isp_sharpen_enable(s_isp_proc) == ESP_OK) {
+        ESP_LOGI(TAG, "Sharpen enabled (h=0.31 m=0.47 thresh=100/30)");
+        isp_enhanced++;
+    } else {
+        ESP_LOGW(TAG, "Sharpen not supported on this chip, skipping");
+    }
+
+    /* BF: 双边滤波 - 降噪 (降低级别保留更多细节) */
+    esp_isp_bf_config_t bf_config = {
+        .denoising_level = 3,      /* 5→3: 减少降噪强度，保留更多细节 */
+        .padding_mode = 0,
+        .padding_data = 0,
+        .bf_template = {{1,2,1},{2,4,2},{1,2,1}},
+        .flags = {.update_once_configured = 1},
+    };
+    if (esp_isp_bf_configure(s_isp_proc, &bf_config) == ESP_OK &&
+        esp_isp_bf_enable(s_isp_proc) == ESP_OK) {
+        ESP_LOGI(TAG, "BF enabled (denoising_level=3)");
+        isp_enhanced++;
+    } else {
+        ESP_LOGW(TAG, "BF not supported on this chip, skipping");
+    }
+
+    /* Gamma: 伽马校正 - 暗部提亮 (gamma=0.5, 比默认0.72更亮) */
+    isp_gamma_curve_points_t gamma_pts;
+    esp_isp_gamma_fill_curve_points(gamma_brighten, &gamma_pts);
+    if (esp_isp_gamma_configure(s_isp_proc, COLOR_COMPONENT_R, &gamma_pts) == ESP_OK &&
+        esp_isp_gamma_configure(s_isp_proc, COLOR_COMPONENT_G, &gamma_pts) == ESP_OK &&
+        esp_isp_gamma_configure(s_isp_proc, COLOR_COMPONENT_B, &gamma_pts) == ESP_OK &&
+        esp_isp_gamma_enable(s_isp_proc) == ESP_OK) {
+        ESP_LOGI(TAG, "Gamma enabled (param=0.6, moderate shadow brighten)");
+        isp_enhanced++;
+    } else {
+        ESP_LOGW(TAG, "Gamma not supported on this chip, skipping");
+    }
+
+    ESP_LOGI(TAG, "摄像头初始化完成 (%dx%d RAW10 -> RGB565, ISP增强模块: %d/5)", CAM_H_RES, CAM_V_RES, isp_enhanced);
     return ESP_OK;
 }
 
@@ -333,7 +455,12 @@ i2c_master_bus_handle_t camera_get_i2c_bus_handle(void)
 void camera_deinit(void)
 {
     if (s_isp_proc) {
-        ESP_LOGI(TAG, "Disabling ISP...");
+        ESP_LOGI(TAG, "Disabling ISP pipeline...");
+        esp_isp_gamma_disable(s_isp_proc);
+        esp_isp_bf_disable(s_isp_proc);
+        esp_isp_sharpen_disable(s_isp_proc);
+        esp_isp_color_disable(s_isp_proc);
+        esp_isp_ccm_disable(s_isp_proc);
         esp_isp_demosaic_disable(s_isp_proc);
         esp_isp_disable(s_isp_proc);
         esp_isp_del_processor(s_isp_proc);

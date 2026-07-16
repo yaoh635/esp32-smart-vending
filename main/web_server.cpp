@@ -163,7 +163,7 @@ static esp_err_t snapshot_handler(httpd_req_t *req)
     uint8_t *jpeg_buf = nullptr;
     size_t jpeg_len = 0;
     esp_err_t ret = rgb565_to_jpeg((const uint8_t *)fb->buf,
-                                    fb->width, fb->height, 75,
+                                    fb->width, fb->height, 50,
                                     &jpeg_buf, &jpeg_len);
     if (ret != ESP_OK || !jpeg_buf) {
         httpd_resp_set_status(req, "500 Internal Server Error");
@@ -204,16 +204,16 @@ static esp_err_t stream_handler(httpd_req_t *req)
             continue;
         }
 
-        auto *fb = node->cam_fb_peek(-1);
+        auto *fb = node->cam_fb_peek(0);
         if (!fb || !fb->buf) {
-            vTaskDelay(pdMS_TO_TICKS(100));
+            vTaskDelay(pdMS_TO_TICKS(10));
             continue;
         }
 
         uint8_t *jpeg_buf = nullptr;
         size_t jpeg_len = 0;
         ret = rgb565_to_jpeg((const uint8_t *)fb->buf,
-                              fb->width, fb->height, 75,
+                              fb->width, fb->height, 50,
                               &jpeg_buf, &jpeg_len);
         if (ret != ESP_OK || !jpeg_buf) {
             vTaskDelay(pdMS_TO_TICKS(100));
@@ -235,7 +235,7 @@ static esp_err_t stream_handler(httpd_req_t *req)
             break;
         }
 
-        vTaskDelay(pdMS_TO_TICKS(125));
+        vTaskDelay(pdMS_TO_TICKS(20));
     }
 
     ESP_LOGI(TAG, "MJPEG stream ended");

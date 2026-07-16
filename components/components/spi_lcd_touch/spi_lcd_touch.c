@@ -7,12 +7,14 @@
 
 #include <stdio.h>
 #include <unistd.h>
+#include <string.h>
 #include <sys/lock.h>
 #include <sys/param.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "esp_timer.h"
+#include "esp_heap_caps.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_vendor.h"
 #include "esp_lcd_panel_ops.h"
@@ -325,6 +327,19 @@ esp_err_t spi_lcd_touch_init(const spi_lcd_touch_config_t *config,
     ESP_ERROR_CHECK(esp_lcd_panel_mirror(panel_handle, true, false));
     ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel_handle, false));
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, true));
+
+    /* Clear display to black before turning on backlight (prevents garbage flash) */
+    ESP_LOGI(TAG, "Clearing display...");
+    uint16_t *black_buf = heap_caps_malloc(s_config.h_res * 80 * sizeof(uint16_t), MALLOC_CAP_DMA);
+    if (black_buf) {
+        memset(black_buf, 0, s_config.h_res * 80 * sizeof(uint16_t));
+        for (int y = 0; y < s_config.v_res; y += 80) {
+            int lines = (y + 80 > s_config.v_res) ? (s_config.v_res - y) : 80;
+            esp_lcd_panel_draw_bitmap(panel_handle, 0, y, s_config.h_res, y + lines, black_buf);
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+        heap_caps_free(black_buf);
+    }
 
     /* Turn on LCD backlight */
     ESP_LOGI(TAG, "Turn on LCD backlight");
