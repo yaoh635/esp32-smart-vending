@@ -47,7 +47,7 @@ esp_err_t face_id_manager_init(void)
     /* Mount config */
     esp_vfs_fat_sdmmc_mount_config_t mount_config = {
         .format_if_mount_failed = true,
-        .max_files = 5,
+        .max_files = 10,
         .allocation_unit_size = 16 * 1024,
     };
 

@@ -22,7 +22,7 @@ extern "C" {
 
 /* 舵机控制 GPIO 引脚（每个商品对应一个舵机） */
 #ifndef VENDING_SERVO_COUNT
-#define VENDING_SERVO_COUNT  5
+#define VENDING_SERVO_COUNT  4
 #endif
 
 /**
