@@ -135,11 +135,7 @@ esp_err_t esp_board_init(int sample_rate, int channels, int bits_per_sample,
 {
     ESP_LOGI(TAG, "Initializing audio hardware");
 
-    /* Enable Power Amplifier */
-    gpio_reset_pin(BSP_PA_CTRL);
-    gpio_set_direction(BSP_PA_CTRL, GPIO_MODE_OUTPUT);
-    gpio_set_level(BSP_PA_CTRL, 1);
-    ESP_LOGI(TAG, "PA enabled on GPIO%d", BSP_PA_CTRL);
+    /* PA (扬声器功放) 不使用，跳过初始化，避免 GPIO53 与舵机冲突 */
 
     /* I2C 总线处理：使用外部传入的或创建新的 */
     if (i2c_bus != NULL) {
@@ -193,6 +189,7 @@ esp_err_t esp_board_init(int sample_rate, int channels, int bits_per_sample,
     ESP_LOGI(TAG, "I2S: MCLK=GPIO%d, BCLK=GPIO%d, WS=GPIO%d, DOUT=GPIO%d, DIN=GPIO%d",
              BSP_I2S_MCLK, BSP_I2S_SCLK, BSP_I2S_WS, BSP_I2S_DOUT, BSP_I2S_DIN);
 
+    bool i2s_reuse = false;
     if (s_i2s_tx_chan == NULL || s_i2s_rx_chan == NULL) {
         /* 首次初始化：创建新通道 */
         i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_PORT, I2S_ROLE_MASTER);
@@ -204,42 +201,53 @@ esp_err_t esp_board_init(int sample_rate, int channels, int bits_per_sample,
         }
         ESP_LOGI(TAG, "I2S channels created");
     } else {
-        ESP_LOGI(TAG, "Reusing existing I2S channels");
+        /* 复用已存在通道：跳过 init_std_mode，直接 enable */
+        ESP_LOGI(TAG, "Reusing existing I2S channels (skip init, enable only)");
+        i2s_reuse = true;
     }
 
-    i2s_std_config_t std_cfg = {
-        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(sample_rate),
-        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(
-            (bits_per_sample == 16) ? I2S_DATA_BIT_WIDTH_16BIT : I2S_DATA_BIT_WIDTH_24BIT,
-            (channels == 1) ? I2S_SLOT_MODE_MONO : I2S_SLOT_MODE_STEREO
-        ),
-        .gpio_cfg = {
-            .mclk = BSP_I2S_MCLK,
-            .bclk = BSP_I2S_SCLK,
-            .ws = BSP_I2S_WS,
-            .dout = BSP_I2S_DOUT,
-            .din = BSP_I2S_DIN,
-            .invert_flags = { .mclk_inv = false, .bclk_inv = false, .ws_inv = false },
-        },
-    };
+    if (!i2s_reuse) {
+        /* 首次初始化：需要配置 std mode */
+        i2s_std_config_t std_cfg = {
+            .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(sample_rate),
+            .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(
+                (bits_per_sample == 16) ? I2S_DATA_BIT_WIDTH_16BIT : I2S_DATA_BIT_WIDTH_24BIT,
+                (channels == 1) ? I2S_SLOT_MODE_MONO : I2S_SLOT_MODE_STEREO
+            ),
+            .gpio_cfg = {
+                .mclk = BSP_I2S_MCLK,
+                .bclk = BSP_I2S_SCLK,
+                .ws = BSP_I2S_WS,
+                .dout = BSP_I2S_DOUT,
+                .din = BSP_I2S_DIN,
+                .invert_flags = { .mclk_inv = false, .bclk_inv = false, .ws_inv = false },
+            },
+        };
 
-    ret = i2s_channel_init_std_mode(s_i2s_tx_chan, &std_cfg);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "I2S TX init failed: %s", esp_err_to_name(ret));
-        return ret;
-    }
+        ret = i2s_channel_init_std_mode(s_i2s_tx_chan, &std_cfg);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "I2S TX init failed: %s", esp_err_to_name(ret));
+            return ret;
+        }
 
-    ret = i2s_channel_init_std_mode(s_i2s_rx_chan, &std_cfg);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "I2S RX init failed: %s", esp_err_to_name(ret));
-        return ret;
-    }
+        ret = i2s_channel_init_std_mode(s_i2s_rx_chan, &std_cfg);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "I2S RX init failed: %s", esp_err_to_name(ret));
+            return ret;
+        }
+    } /* end if (!i2s_reuse) */
 
     ret = i2s_channel_enable(s_i2s_tx_chan);
-    if (ret != ESP_OK) return ret;
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "I2S TX enable failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
 
     ret = i2s_channel_enable(s_i2s_rx_chan);
-    if (ret != ESP_OK) return ret;
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "I2S RX enable failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
 
     s_i2s_enabled = true;
     ESP_LOGI(TAG, "I2S enabled");
@@ -266,7 +274,7 @@ esp_err_t esp_board_init(int sample_rate, int channels, int bits_per_sample,
         .ctrl_if = &s_es8311_ctrl,
         .gpio_if = audio_codec_new_gpio(),
         .codec_mode = ESP_CODEC_DEV_WORK_MODE_DAC,
-        .pa_pin = BSP_PA_CTRL,
+        .pa_pin = -1,  /* 不使用 PA */
         .master_mode = false,
         .use_mclk = true,
     };
@@ -369,9 +377,6 @@ esp_err_t esp_board_deinit(void)
         i2c_master_bus_rm_device(s_es7210_dev);
         s_es7210_dev = NULL;
     }
-
-    /* 关闭 PA */
-    gpio_set_level(BSP_PA_CTRL, 0);
 
     s_i2s_enabled = false;
     ESP_LOGI(TAG, "Audio hardware deinitialized");

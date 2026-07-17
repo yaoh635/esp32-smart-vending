@@ -21,6 +21,7 @@
 #include "esp_mn_iface.h"
 #include "esp_mn_models.h"
 #include "esp_process_sdkconfig.h"
+#include "esp_mn_speech_commands.h"
 #include "model_path.h"
 
 /* Board init */
@@ -107,8 +108,38 @@ static void detect_task(void *arg)
     esp_mn_iface_t *multinet = esp_mn_handle_from_name(mn_name);
     model_iface_data_t *model_data = multinet->create(mn_name, 6000);
 
-    /* 从 sdkconfig 加载语音命令 */
-    esp_mn_commands_update_from_sdkconfig(multinet, model_data);
+    /* 运行时加载自定义售卖机语音指令 */
+    esp_mn_commands_alloc(multinet, model_data);
+
+    /* 可乐 */
+    esp_mn_commands_add(1, "wo xiang yao ke le");
+    esp_mn_commands_add(2, "wo yao ke le");
+    esp_mn_commands_add(3, "ke le");
+    /* 雪碧 */
+    esp_mn_commands_add(4, "wo xiang yao xue bi");
+    esp_mn_commands_add(5, "wo yao xue bi");
+    esp_mn_commands_add(6, "xue bi");
+    /* 水 */
+    esp_mn_commands_add(7, "wo xiang yao shui");
+    esp_mn_commands_add(8, "wo yao shui");
+    esp_mn_commands_add(9, "shui");
+    esp_mn_commands_add(10, "wo xiang yao kuang quan shui");
+    esp_mn_commands_add(11, "wo yao kuang quan shui");
+    esp_mn_commands_add(12, "kuang quan shui");
+    /* 薯片 */
+    esp_mn_commands_add(13, "wo xiang yao shu pian");
+    esp_mn_commands_add(14, "wo yao shu pian");
+    esp_mn_commands_add(15, "shu pian");
+
+    esp_mn_error_t *mn_err = esp_mn_commands_update();
+    if (mn_err) {
+        ESP_LOGE(TAG, "Commands update failed: %d errors", mn_err->num);
+        for (int i = 0; i < mn_err->num && i < 5; i++) {
+            ESP_LOGE(TAG, "  Error %d: cmd=%d str=%s", i,
+                     mn_err->phrases[i]->command_id,
+                     mn_err->phrases[i]->string ? mn_err->phrases[i]->string : "null");
+        }
+    }
 
     int mu_chunksize = multinet->get_samp_chunksize(model_data);
     assert(mu_chunksize == afe_chunksize);
@@ -275,11 +306,11 @@ int voice_cmd_to_product_index(int cmd_id)
     if (cmd_id >= VOICE_CMD_COLA_1 && cmd_id <= VOICE_CMD_COLA_3) {
         return 0;  /* Cola */
     } else if (cmd_id >= VOICE_CMD_SPRITE_1 && cmd_id <= VOICE_CMD_SPRITE_3) {
-        return 1;  /* Sprite → Water (index 1) */
+        return 1;  /* Sprite */
     } else if (cmd_id >= VOICE_CMD_WATER_1 && cmd_id <= VOICE_CMD_WATER_6) {
-        return 1;  /* Water */
+        return 2;  /* Water */
     } else if (cmd_id >= VOICE_CMD_CHIPS_1 && cmd_id <= VOICE_CMD_CHIPS_3) {
-        return 2;  /* Chips */
+        return 3;  /* Chips */
     }
     return -1;  /* Unknown */
 }
