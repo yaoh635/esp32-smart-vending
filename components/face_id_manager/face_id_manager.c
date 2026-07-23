@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <errno.h>
 
 static const char *TAG = "face_id_mgr";
 
@@ -48,7 +49,7 @@ esp_err_t face_id_manager_init(void)
     esp_vfs_fat_sdmmc_mount_config_t mount_config = {
         .format_if_mount_failed = true,
         .max_files = 10,
-        .allocation_unit_size = 16 * 1024,
+        .allocation_unit_size = 4096,
     };
 
     /* Host config — use Slot 0 (IOMUX, fixed pins 43/44/39-42) */
@@ -101,6 +102,20 @@ esp_err_t face_id_manager_init(void)
     ESP_LOGI(TAG, "SD card mounted at %s", FACE_ID_MOUNT_POINT);
     sdmmc_card_print_info(stdout, s_card);
 
+    /* 诊断：测试 SD 卡是否可写 */
+    {
+        const char *test_path = "/sdcard/write_test.tmp";
+        FILE *tf = fopen(test_path, "w");
+        if (tf) {
+            fprintf(tf, "test");
+            fclose(tf);
+            ESP_LOGI(TAG, "SD card write test: OK");
+            remove(test_path);
+        } else {
+            ESP_LOGE(TAG, "SD card write test: FAILED (errno=%d)", errno);
+        }
+    }
+
     /* Load existing face database to determine next ID */
     FILE *f = fopen(FACE_DB_PATH, "r");
     if (f) {
@@ -119,12 +134,15 @@ esp_err_t face_id_manager_init(void)
         fclose(f);
         ESP_LOGI(TAG, "Loaded face DB, next ID = %d", s_next_id);
     } else {
+        ESP_LOGW(TAG, "Face DB not found (errno=%d), creating new one", errno);
         /* Create new face DB with header */
         f = fopen(FACE_DB_PATH, "w");
         if (f) {
             fprintf(f, "id,name,enroll_time_us\n");
             fclose(f);
             ESP_LOGI(TAG, "Created new face database");
+        } else {
+            ESP_LOGE(TAG, "Failed to create face database (errno=%d)", errno);
         }
     }
 
@@ -136,6 +154,8 @@ esp_err_t face_id_manager_init(void)
             fprintf(f, "timestamp_us,face_id,product_name,price_text\n");
             fclose(f);
             ESP_LOGI(TAG, "Created new purchase log");
+        } else {
+            ESP_LOGE(TAG, "Failed to create purchase log (errno=%d)", errno);
         }
     }
 

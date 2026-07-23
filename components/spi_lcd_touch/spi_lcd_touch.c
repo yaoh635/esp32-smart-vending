@@ -18,6 +18,7 @@
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_st7789.h"
 #include "driver/gpio.h"
+#include "esp_heap_caps.h"
 #include "driver/spi_master.h"
 #include "esp_err.h"
 #include "esp_log.h"
@@ -369,8 +370,15 @@ esp_err_t spi_lcd_touch_init(const spi_lcd_touch_config_t *config,
     /* Allocate LVGL draw buffers (double buffering) */
     size_t draw_buffer_sz = s_config.h_res * s_config.draw_buf_lines * sizeof(lv_color16_t);
     void *buf1 = spi_bus_dma_memory_alloc(LCD_HOST, draw_buffer_sz, 0);
+    if (!buf1) {
+        /* DMA 内存不足，尝试用 PSRAM DMA 分配 */
+        buf1 = heap_caps_aligned_alloc(64, draw_buffer_sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA);
+    }
     assert(buf1);
     void *buf2 = spi_bus_dma_memory_alloc(LCD_HOST, draw_buffer_sz, 0);
+    if (!buf2) {
+        buf2 = heap_caps_aligned_alloc(64, draw_buffer_sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA);
+    }
     assert(buf2);
 
     /* Configure LVGL display */

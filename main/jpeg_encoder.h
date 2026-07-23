@@ -23,18 +23,23 @@ extern "C" {
 esp_err_t jpeg_encoder_init(void);
 
 /**
- * @brief Encode an RGB565 frame to JPEG using hardware encoder
+ * @brief Encode an RGB565 frame to JPEG at full resolution
  *
- * @param[in]  rgb565    Pointer to RGB565 frame data
- * @param[in]  width     Frame width in pixels
- * @param[in]  height    Frame height in pixels
- * @param[in]  quality   JPEG quality (1-100, higher = better quality + larger file)
- * @param[out] jpeg_buf  Pointer to output JPEG buffer (caller must free with free())
- * @param[out] jpeg_len  Pointer to output JPEG size in bytes
- * @return ESP_OK on success
+ * Uses persistent encoder handle (no open/close per frame).
+ * Returns pointer to internal static buffer — caller must NOT free it.
  */
 esp_err_t rgb565_to_jpeg(const uint8_t *rgb565, int width, int height,
                          int quality, uint8_t **jpeg_buf, size_t *jpeg_len);
+
+/**
+ * @brief Encode an RGB565 frame to JPEG at half resolution (for web streaming)
+ *
+ * Downsamples 800×800 → 400×400 before encoding.
+ * Uses persistent encoder handle — much faster than full resolution.
+ * Returns pointer to internal static buffer — caller must NOT free it.
+ */
+esp_err_t rgb565_to_jpeg_half(const uint8_t *rgb565, int width, int height,
+                              uint8_t **jpeg_buf, size_t *jpeg_len);
 
 /**
  * @brief Release the hardware JPEG encoder

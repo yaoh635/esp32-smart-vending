@@ -63,11 +63,13 @@ OV5647 Camera (800×800 RAW8 MIPI-CSI)
 ### WiFi & Web Server
 
 - **ESP-Hosted** WiFi via ESP32-C6 co-processor (SDIO interface)
-- **HTTP server** on port 80 with 4 endpoints:
+- **HTTP server** on port 80 with 21 endpoints (17 fixed + 4 wildcard):
   - `GET /` — HTML status dashboard
   - `GET /status` — JSON system status (uptime, memory, face count, vending state)
   - `GET /stream` — MJPEG live camera stream (~8 FPS)
   - `GET /snapshot` — Single JPEG frame
+  - REST API: `/api/system`, `/api/inventory`, `/api/inventory/restock`, `/api/sales/summary`, `/api/sales/today`, `/api/sales/ranking`, `/api/sales/history`, `/api/users`, `/api/products`, `/api/order`, `/api/face/register`, `/api/admin/login`, `/api/admin/password`
+  - Wildcard routes: `/api/users/*`, `/api/order/*`, `/api/recommend/*`
 - **Hardware JPEG encoder** on ESP32-P4 (RGB565 → JPEG, quality 75, zero CPU load)
 - WiFi config via Kconfig: `CONFIG_APP_WIFI_SSID`, `CONFIG_APP_WIFI_PASSWORD`
 

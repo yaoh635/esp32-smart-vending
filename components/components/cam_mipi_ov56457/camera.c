@@ -6,13 +6,14 @@
 
 /**
  * @file camera.c
- * @brief 摄像头驱动模块 - 实现MIPI CSI摄像头初始化、双缓冲帧管理和ISP图像处理
+ * @brief 摄像头驱动模块 - MIPI CSI + ISP 全流水线 + AWB 自动白平衡
  *
  * 本模块负责:
- * 1. 初始化MIPI CSI摄像头传感器
- * 2. 配置双缓冲帧管理机制
- * 3. 设置ISP进行RAW8到RGB565的颜色空间转换
- * 4. 提供帧数据访问接口
+ * 1. 初始化 MIPI CSI 摄像头传感器 (OV5647, RAW8 800×800)
+ * 2. 配置双缓冲帧管理（CSI ping-pong，无 LCD 显示）
+ * 3. ISP 流水线: BLC → BF → LSC → Demosaic → WBG → CCM → Gamma → Sharpen → Color
+ * 4. AWB 自动白平衡: 硬件统计 + WBG 增益调节
+ * 5. 提供帧数据访问接口（供 web server + 人脸检测使用）
  */
 
 #include <stdio.h>
@@ -32,6 +33,8 @@
 #include "driver/isp_sharpen.h"
 #include "driver/isp_bf.h"
 #include "driver/isp_gamma.h"
+#include "driver/isp_wbg.h"
+#include "driver/isp_awb.h"
 #include "esp_cam_ctlr_csi.h"
 #include "esp_cam_ctlr.h"
 #include "esp_cam_sensor.h"
@@ -52,216 +55,429 @@ static uint32_t gamma_brighten(uint32_t x)
 }
 
 /* ==================== 双缓冲机制 ==================== */
-/* 使用两个缓冲区交替存储帧数据，实现无缝帧切换 */
-static void *s_frame_buffers[2] = {NULL, NULL};        /* 帧缓冲区数组 */
-static volatile int s_active_buf_idx = 0;               /* 当前正在接收数据的缓冲区索引 */
-static volatile int s_display_buf_idx = -1;             /* 当前可供显示的缓冲区索引 */
-static SemaphoreHandle_t s_frame_ready_sem = NULL;      /* 帧就绪信号量，用于通知显示任务 */
-static esp_cam_sensor_device_t *s_cam_sensor = NULL;    /* 传感器设备句柄 */
-static isp_proc_handle_t s_isp_proc = NULL;             /* ISP处理器句柄（用于deinit） */
-static i2c_master_bus_handle_t s_i2c_bus_handle = NULL; /* I2C总线句柄（供音频编解码器共享） */
+/* 使用两个缓冲区交替存储帧数据，实现 CSI ping-pong（无 LCD 显示） */
+static void *s_frame_buffers[2] = {NULL, NULL};
+static volatile int s_active_buf_idx = 0;
+static SemaphoreHandle_t s_frame_ready_sem = NULL;      /* 帧就绪信号量（内部同步用） */
+static esp_cam_sensor_device_t *s_cam_sensor = NULL;
+static isp_proc_handle_t s_isp_proc = NULL;
+static i2c_master_bus_handle_t s_i2c_bus_handle = NULL;
 
-/* 帧缓冲区大小计算: 水平分辨率 × 垂直分辨率 × 每像素字节数 */
+/* AWB 控制器 */
+static isp_awb_ctlr_t s_awb_ctlr = NULL;
+static QueueHandle_t s_awb_queue = NULL;
+static TaskHandle_t s_awb_task_handle = NULL;
+
+/* 帧缓冲区大小: 800×800×2 bytes (RGB565) */
 #define FRAME_BUFFER_SIZE  (CAM_H_RES * CAM_V_RES * EXAMPLE_RGB565_BYTES_PER_PIXEL)
+
+/* AWB 参数 */
+#define AWB_GAIN_NORM           256
+#define AWB_P_GAIN              0.5f
+#define AWB_GAIN_UPDATE_COUNT   5
 
 /* ==================== 回调函数 ==================== */
 
-/**
- * @brief 获取新帧缓冲区回调 - 当CSI准备好接收新帧时调用
- * @param handle CSI控制器句柄
- * @param trans 传输描述符，需要填充缓冲区地址和长度
- * @param user_data 用户数据(未使用)
- * @return false 表示不需要上下文切换
- */
 static bool s_camera_get_new_vb(esp_cam_ctlr_handle_t handle, esp_cam_ctlr_trans_t *trans, void *user_data)
 {
-    /* 将当前活动缓冲区提供给CSI控制器 */
     trans->buffer = s_frame_buffers[s_active_buf_idx];
     trans->buflen = FRAME_BUFFER_SIZE;
     return false;
 }
 
-/**
- * @brief 帧传输完成回调 - 当一帧数据接收完成后调用
- * @param handle CSI控制器句柄
- * @param trans 传输描述符
- * @param user_data 用户数据(未使用)
- * @return false 表示不需要上下文切换
- *
- * 此函数在ISR中执行，完成以下操作:
- * 1. 将当前缓冲区标记为可显示
- * 2. 切换到另一个缓冲区用于下一帧
- * 3. 通知显示任务有新帧可用
- */
 static bool s_camera_get_finished_trans(esp_cam_ctlr_handle_t handle, esp_cam_ctlr_trans_t *trans, void *user_data)
 {
-    /* 将当前缓冲区设为显示缓冲区 */
-    s_display_buf_idx = s_active_buf_idx;
-    /* 切换到另一个缓冲区(0->1 或 1->0) */
+    /* 切换到另一个缓冲区 */
     s_active_buf_idx = 1 - s_active_buf_idx;
 
-    /* 从ISR中释放信号量，通知显示任务 */
+    /* 通知帧就绪 */
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
     xSemaphoreGiveFromISR(s_frame_ready_sem, &xHigherPriorityTaskWoken);
-    /* 如果有更高优先级任务被唤醒，触发上下文切换 */
     portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
     return false;
 }
 
 /* ==================== 访问接口 ==================== */
 
-/**
- * @brief 获取指定索引的帧缓冲区指针
- * @param index 缓冲区索引(0或1)
- * @return 缓冲区指针
- */
 void *camera_get_frame_buffer(int index)           { return s_frame_buffers[index]; }
-
-/**
- * @brief 获取帧缓冲区大小
- * @return 缓冲区大小(字节)
- */
 size_t camera_get_frame_buffer_size(void)          { return FRAME_BUFFER_SIZE; }
-
-/**
- * @brief 获取帧就绪信号量句柄
- * @return 信号量句柄，用于等待新帧到达
- */
 SemaphoreHandle_t camera_get_frame_ready_sem(void) { return s_frame_ready_sem; }
+volatile int *camera_get_display_buf_idx_ptr(void) { return &s_active_buf_idx; }
+
+/* 获取最新完成的帧缓冲区（刚写完的那个） */
+void *camera_get_latest_frame(void)
+{
+    /* s_active_buf_idx 已切换，所以 1-s_active_buf_idx 是刚完成的帧 */
+    return s_frame_buffers[1 - s_active_buf_idx];
+}
+
+/* ==================== ISP 辅助模块 ==================== */
+
+#if CONFIG_ESP32P4_REV_MIN_FULL >= 100
+/**
+ * @brief 配置 LSC（镜头阴影校正）模块
+ */
+static esp_err_t camera_config_lsc(isp_proc_handle_t isp_proc)
+{
+    esp_isp_lsc_gain_array_t gain_array = {};
+    esp_isp_lsc_config_t lsc_config = {
+        .gain_array = &gain_array,
+    };
+
+    size_t gain_size = 0;
+    esp_err_t ret = esp_isp_lsc_allocate_gain_array(isp_proc, &gain_array, &gain_size);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "LSC gain alloc failed: %d", ret);
+        return ret;
+    }
+
+    /* 默认增益：轻微补偿边缘衰减 */
+    isp_lsc_gain_t gain_val = { .decimal = 204, .integer = 0 };
+    for (int i = 0; i < gain_size; i++) {
+        gain_array.gain_r[i].val = gain_val.val;
+        gain_array.gain_gr[i].val = gain_val.val;
+        gain_array.gain_gb[i].val = gain_val.val;
+        gain_array.gain_b[i].val = gain_val.val;
+    }
+
+    ret = esp_isp_lsc_configure(isp_proc, &lsc_config);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "LSC configure failed: %d", ret);
+        return ret;
+    }
+    ret = esp_isp_lsc_enable(isp_proc);
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "LSC enabled (edge compensation)");
+    }
+    return ret;
+}
+#endif /* rev >= 100 */
+
+#if CONFIG_ESP32P4_REV_MIN_FULL >= 300
+/**
+ * @brief 配置 BLC（黑电平校正）模块
+ */
+static esp_err_t camera_config_blc(isp_proc_handle_t isp_proc)
+{
+    esp_isp_blc_config_t blc_config = {
+        .window = {
+            .top_left = { .x = 0, .y = 0 },
+            .btm_right = { .x = CAM_H_RES, .y = CAM_V_RES },
+        },
+        .filter_enable = true,
+        .filter_threshold = {
+            .top_left_chan_thresh = 128,
+            .top_right_chan_thresh = 128,
+            .bottom_left_chan_thresh = 128,
+            .bottom_right_chan_thresh = 128,
+        },
+        .stretch = {
+            .top_left_chan_stretch_en = true,
+            .top_right_chan_stretch_en = true,
+            .bottom_left_chan_stretch_en = true,
+            .bottom_right_chan_stretch_en = true,
+        },
+    };
+
+    esp_err_t ret = esp_isp_blc_configure(isp_proc, &blc_config);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "BLC configure failed: %d", ret);
+        return ret;
+    }
+    ret = esp_isp_blc_enable(isp_proc);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "BLC enable failed: %d", ret);
+        return ret;
+    }
+
+    esp_isp_blc_offset_t blc_offset = {
+        .top_left_chan_offset = 20,
+        .top_right_chan_offset = 20,
+        .bottom_left_chan_offset = 20,
+        .bottom_right_chan_offset = 20,
+    };
+    ret = esp_isp_blc_set_correction_offset(isp_proc, &blc_offset);
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "BLC enabled (offset=20)");
+    }
+    return ret;
+}
+#endif /* rev >= 300 */
+
+/* ==================== AWB 自动白平衡 ==================== */
 
 /**
- * @brief 获取显示缓冲区索引指针
- * @return 指向当前显示缓冲区索引的指针
- *
- * 注意: 返回指针而非值，因为索引会在ISR中更新
+ * @brief AWB 统计回调（ISR 上下文）
  */
-volatile int *camera_get_display_buf_idx_ptr(void) { return &s_display_buf_idx; }
+static bool IRAM_ATTR s_awb_statistics_callback(isp_awb_ctlr_t awb_ctlr,
+                                                 const esp_isp_awb_evt_data_t *edata,
+                                                 void *user_data)
+{
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    if (s_awb_queue != NULL) {
+        if (xQueueSendFromISR(s_awb_queue, &edata->awb_result, &xHigherPriorityTaskWoken) != pdTRUE) {
+            return false;
+        }
+    }
+    return xHigherPriorityTaskWoken == pdTRUE;
+}
+
+/**
+ * @brief PI 控制器平滑更新白平衡增益
+ */
+static void s_awb_pi_update(isp_wbg_gain_t target, isp_wbg_gain_t current, isp_wbg_gain_t *out)
+{
+    float err_r = (float)target.gain_r - (float)current.gain_r;
+    float err_b = (float)target.gain_b - (float)current.gain_b;
+
+    out->gain_r = (uint32_t)((float)current.gain_r + AWB_P_GAIN * err_r + 0.5f);
+    out->gain_g = AWB_GAIN_NORM;
+    out->gain_b = (uint32_t)((float)current.gain_b + AWB_P_GAIN * err_b + 0.5f);
+}
+
+/**
+ * @brief 从 AWB 统计计算白平衡增益
+ */
+static bool s_awb_calc_gain(const isp_awb_stat_result_t *stat, isp_wbg_gain_t *gain)
+{
+    if (stat->white_patch_num == 0 || stat->sum_r == 0 || stat->sum_b == 0) {
+        return false;
+    }
+
+    float gr = ((float)stat->sum_g / (float)stat->sum_r) * AWB_GAIN_NORM;
+    float gb = ((float)stat->sum_g / (float)stat->sum_b) * AWB_GAIN_NORM;
+
+    gain->gain_r = (uint32_t)(gr + 0.5f);
+    gain->gain_g = AWB_GAIN_NORM;
+    gain->gain_b = (uint32_t)(gb + 0.5f);
+    return true;
+}
+
+/**
+ * @brief AWB 处理任务
+ */
+static void s_awb_task(void *arg)
+{
+    isp_awb_stat_result_t stat;
+    isp_wbg_gain_t current_gain = { .gain_r = AWB_GAIN_NORM, .gain_g = AWB_GAIN_NORM, .gain_b = AWB_GAIN_NORM };
+    uint32_t count = 0;
+    uint64_t sum_r = 0, sum_g = 0, sum_b = 0;
+
+    ESP_LOGI(TAG, "AWB task started");
+
+    while (1) {
+        if (xQueueReceive(s_awb_queue, &stat, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
+
+        isp_wbg_gain_t gain;
+        if (!s_awb_calc_gain(&stat, &gain)) {
+            continue;
+        }
+
+        sum_r += gain.gain_r;
+        sum_g += gain.gain_g;
+        sum_b += gain.gain_b;
+        count++;
+
+        if (count >= AWB_GAIN_UPDATE_COUNT) {
+            isp_wbg_gain_t target = {
+                .gain_r = (uint32_t)(sum_r / count),
+                .gain_g = (uint32_t)(sum_g / count),
+                .gain_b = (uint32_t)(sum_b / count),
+            };
+
+            isp_wbg_gain_t new_gain;
+            s_awb_pi_update(target, current_gain, &new_gain);
+
+            esp_err_t ret = esp_isp_wbg_set_wb_gain(s_isp_proc, new_gain);
+            if (ret == ESP_OK) {
+                current_gain = new_gain;
+                ESP_LOGD(TAG, "AWB: R=%lu G=%lu B=%lu",
+                         new_gain.gain_r, new_gain.gain_g, new_gain.gain_b);
+            }
+
+            count = 0;
+            sum_r = sum_g = sum_b = 0;
+        }
+    }
+}
+
+/**
+ * @brief 初始化并启动 AWB
+ */
+static esp_err_t camera_init_awb(isp_proc_handle_t isp_proc)
+{
+    /* 配置 WBG 模块 */
+    esp_isp_wbg_config_t wbg_config = {
+        .flags = { .update_once_configured = true },
+    };
+    esp_err_t ret = esp_isp_wbg_configure(isp_proc, &wbg_config);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "WBG configure failed: %d", ret);
+        return ret;
+    }
+    ESP_RETURN_ON_ERROR(esp_isp_wbg_enable(isp_proc), TAG, "WBG enable failed");
+
+    /* 设置初始增益（中性） */
+    isp_wbg_gain_t init_gain = { .gain_r = AWB_GAIN_NORM, .gain_g = AWB_GAIN_NORM, .gain_b = AWB_GAIN_NORM };
+    esp_isp_wbg_set_wb_gain(isp_proc, init_gain);
+
+    /* 创建 AWB 控制器（统计用） */
+    esp_isp_awb_config_t awb_config = {
+        .sample_point = ISP_AWB_SAMPLE_POINT_AFTER_CCM,
+        .window = {
+            .top_left = { .x = CAM_H_RES * 0.2f, .y = CAM_V_RES * 0.2f },
+            .btm_right = { .x = CAM_H_RES * 0.8f - 1, .y = CAM_V_RES * 0.8f - 1 },
+        },
+        .subwindow = {
+            .top_left = { .x = CAM_H_RES * 0.2f, .y = CAM_V_RES * 0.2f },
+            .btm_right = { .x = CAM_H_RES * 0.8f - 1, .y = CAM_V_RES * 0.8f - 1 },
+        },
+        .white_patch = {
+            .luminance = { .min = 0, .max = 220 * 3 },
+            .red_green_ratio = { .min = 0.5f, .max = 1.999f },
+            .blue_green_ratio = { .min = 0.5f, .max = 1.999f },
+        },
+        .intr_priority = 0,
+    };
+
+    ret = esp_isp_new_awb_controller(isp_proc, &awb_config, &s_awb_ctlr);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "AWB controller create failed: %d", ret);
+        return ret;
+    }
+
+    /* AWB 统计队列 */
+    s_awb_queue = xQueueCreateWithCaps(1, sizeof(isp_awb_stat_result_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!s_awb_queue) {
+        ESP_LOGW(TAG, "AWB queue create failed");
+        esp_isp_del_awb_controller(s_awb_ctlr);
+        s_awb_ctlr = NULL;
+        return ESP_ERR_NO_MEM;
+    }
+
+    /* 注册回调 */
+    esp_isp_awb_cbs_t awb_cbs = { .on_statistics_done = s_awb_statistics_callback };
+    ESP_GOTO_ON_ERROR(esp_isp_awb_register_event_callbacks(s_awb_ctlr, &awb_cbs, NULL), err, TAG, "AWB cb register failed");
+    ESP_GOTO_ON_ERROR(esp_isp_awb_controller_enable(s_awb_ctlr), err, TAG, "AWB enable failed");
+    ESP_GOTO_ON_ERROR(esp_isp_awb_controller_start_continuous_statistics(s_awb_ctlr), err, TAG, "AWB start failed");
+
+    /* 创建 AWB 处理任务 */
+    if (xTaskCreate(s_awb_task, "awb_task", 4096, NULL, 5, &s_awb_task_handle) != pdPASS) {
+        ESP_LOGW(TAG, "AWB task create failed");
+        goto err;
+    }
+
+    ESP_LOGI(TAG, "AWB enabled (WBG + statistics + PI controller)");
+    return ESP_OK;
+
+err:
+    esp_isp_awb_controller_stop_continuous_statistics(s_awb_ctlr);
+    esp_isp_awb_controller_disable(s_awb_ctlr);
+    esp_isp_wbg_disable(isp_proc);
+    if (s_awb_queue) {
+        vQueueDeleteWithCaps(s_awb_queue);
+        s_awb_queue = NULL;
+    }
+    esp_isp_del_awb_controller(s_awb_ctlr);
+    s_awb_ctlr = NULL;
+    return ret;
+}
 
 /* ==================== 初始化函数 ==================== */
 
-/**
- * @brief 初始化摄像头系统
- * @param cam_handle 输出参数，返回CSI控制器句柄
- * @param trans 输出参数，返回初始传输描述符
- * @return ESP_OK 成功，其他值表示失败
- *
- * 初始化流程:
- * 1. 配置MIPI LDO电源
- * 2. 创建双缓冲区(PSRAM中)
- * 3. 初始化I2C总线
- * 4. 检测并初始化摄像头传感器
- * 5. 配置CSI控制器
- * 6. 初始化ISP进行颜色转换
- */
 esp_err_t camera_init(esp_cam_ctlr_handle_t *cam_handle, esp_cam_ctlr_trans_t *trans)
 {
     esp_err_t ret;
 
-    /* ========== 步骤1: 配置MIPI PHY LDO电源 ========== */
-    /* MIPI接口需要专用的低压差稳压器供电 */
+    /* ========== 步骤1: MIPI PHY LDO 电源 ========== */
     esp_ldo_channel_handle_t ldo_mipi_phy = NULL;
     esp_ldo_channel_config_t ldo_cfg = {
-        .chan_id = CONFIG_EXAMPLE_USED_LDO_CHAN_ID,      /* LDO通道ID */
-        .voltage_mv = CONFIG_EXAMPLE_USED_LDO_VOLTAGE_MV, /* 输出电压(mV) */
+        .chan_id = CONFIG_EXAMPLE_USED_LDO_CHAN_ID,
+        .voltage_mv = CONFIG_EXAMPLE_USED_LDO_VOLTAGE_MV,
     };
-    ESP_RETURN_ON_ERROR(esp_ldo_acquire_channel(&ldo_cfg, &ldo_mipi_phy), TAG, "LDO初始化失败");
+    ESP_RETURN_ON_ERROR(esp_ldo_acquire_channel(&ldo_cfg, &ldo_mipi_phy), TAG, "LDO init failed");
 
-    /* ========== 步骤2: 创建帧就绪信号量 ========== */
+    /* ========== 步骤2: 帧就绪信号量 ========== */
     s_frame_ready_sem = xSemaphoreCreateBinary();
     assert(s_frame_ready_sem);
 
-    /* ========== 步骤3: 分配双缓冲区(PSRAM) ========== */
-    /* 使用64字节对齐，确保DMA访问效率 */
+    /* ========== 步骤3: 双缓冲区 (PSRAM) ========== */
     for (int i = 0; i < 2; i++) {
         s_frame_buffers[i] = heap_caps_aligned_calloc(128, 1, FRAME_BUFFER_SIZE, MALLOC_CAP_SPIRAM);
         assert(s_frame_buffers[i]);
-        /* 清零缓冲区 */
         memset(s_frame_buffers[i], 0x00, FRAME_BUFFER_SIZE);
-        /* 同步缓存到内存(Cache -> Memory) */
         esp_cache_msync(s_frame_buffers[i], FRAME_BUFFER_SIZE, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
     }
-    ESP_LOGI(TAG, "双缓冲区已分配: %p %p (每个%zu字节)",
-             s_frame_buffers[0], s_frame_buffers[1], FRAME_BUFFER_SIZE);
+    ESP_LOGI(TAG, "Dual buffers: %p %p (each %zu bytes)", s_frame_buffers[0], s_frame_buffers[1], FRAME_BUFFER_SIZE);
 
-    /* 初始化传输描述符 */
     trans->buffer = s_frame_buffers[0];
     trans->buflen = FRAME_BUFFER_SIZE;
 
-    /* ========== 步骤4: 初始化I2C总线(SCCB) ========== */
-    /* SCCB是摄像头传感器的控制总线，基于I2C协议 */
+    /* ========== 步骤4: I2C 总线 (SCCB) ========== */
     i2c_master_bus_config_t i2c_bus_conf = {
-        .clk_source = I2C_CLK_SRC_DEFAULT,                    /* 时钟源 */
-        .sda_io_num = EXAMPLE_MIPI_CSI_CAM_SCCB_SDA_IO,      /* SDA引脚 */
-        .scl_io_num = EXAMPLE_MIPI_CSI_CAM_SCCB_SCL_IO,      /* SCL引脚 */
-        .i2c_port = I2C_NUM_0,                                /* I2C端口号 */
-        .flags.enable_internal_pullup = true,                 /* 启用内部上拉电阻 */
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .sda_io_num = EXAMPLE_MIPI_CSI_CAM_SCCB_SDA_IO,
+        .scl_io_num = EXAMPLE_MIPI_CSI_CAM_SCCB_SCL_IO,
+        .i2c_port = I2C_NUM_0,
+        .flags.enable_internal_pullup = true,
     };
     i2c_master_bus_handle_t i2c_bus_handle = NULL;
-    ESP_RETURN_ON_ERROR(i2c_new_master_bus(&i2c_bus_conf, &i2c_bus_handle), TAG, "I2C初始化失败");
-    s_i2c_bus_handle = i2c_bus_handle;  /* 保存供音频编解码器共享 */
+    ESP_RETURN_ON_ERROR(i2c_new_master_bus(&i2c_bus_conf, &i2c_bus_handle), TAG, "I2C init failed");
+    s_i2c_bus_handle = i2c_bus_handle;
 
     /* ========== 步骤5: 检测摄像头传感器 ========== */
-    /* 遍历所有已注册的传感器驱动，尝试检测连接的摄像头 */
     esp_cam_sensor_config_t cam_config = {
-        .reset_pin = -1,    /* 复位引脚(-1表示未使用) */
-        .pwdn_pin = -1,     /* 电源控制引脚(-1表示未使用) */
-        .xclk_pin = -1,     /* 外部时钟引脚(-1表示未使用) */
+        .reset_pin = -1,
+        .pwdn_pin = -1,
+        .xclk_pin = -1,
     };
     esp_cam_sensor_device_t *cam = NULL;
-    /* 遍历传感器检测函数数组 */
     for (esp_cam_sensor_detect_fn_t *p = &__esp_cam_sensor_detect_fn_array_start;
          p < &__esp_cam_sensor_detect_fn_array_end; ++p) {
-        /* 配置I2C设备参数 */
         sccb_i2c_config_t i2c_config = {
-            .scl_speed_hz = EXAMPLE_CAM_SCCB_FREQ,    /* I2C时钟频率 */
-            .device_address = p->sccb_addr,            /* 传感器I2C地址 */
-            .dev_addr_length = I2C_ADDR_BIT_LEN_7,    /* 7位地址模式 */
+            .scl_speed_hz = EXAMPLE_CAM_SCCB_FREQ,
+            .device_address = p->sccb_addr,
+            .dev_addr_length = I2C_ADDR_BIT_LEN_7,
         };
         ESP_RETURN_ON_ERROR(sccb_new_i2c_io(i2c_bus_handle, &i2c_config, &cam_config.sccb_handle),
-                            TAG, "SCCB IO创建失败");
+                            TAG, "SCCB IO create failed");
         cam_config.sensor_port = p->port;
-        /* 尝试检测传感器 */
         cam = (*(p->detect))(&cam_config);
         if (cam) {
-            ESP_LOGI(TAG, "检测到摄像头传感器");
+            ESP_LOGI(TAG, "Camera sensor detected");
             break;
         }
-        /* 检测失败，释放I2C IO */
         ESP_ERROR_CHECK(esp_sccb_del_i2c_io(cam_config.sccb_handle));
     }
-    assert(cam);  /* 确保检测到摄像头 */
-    s_cam_sensor = cam;  /* 保存传感器句柄供外部使用 */
+    assert(cam);
+    s_cam_sensor = cam;
 
     /* ========== 步骤6: 设置摄像头输出格式 ========== */
-    /* 查询传感器支持的所有格式 */
     esp_cam_sensor_format_array_t cam_fmt_array = {0};
     esp_cam_sensor_query_format(cam, &cam_fmt_array);
     esp_cam_sensor_format_t *cam_cur_fmt = NULL;
-    /* 查找目标格式(由EXAMPLE_CAM_FORMAT宏定义) */
     for (int i = 0; i < cam_fmt_array.count; i++) {
-        ESP_LOGI(TAG, "支持格式[%d]: %s", i, cam_fmt_array.format_array[i].name);
+        ESP_LOGI(TAG, "Supported format[%d]: %s", i, cam_fmt_array.format_array[i].name);
         if (!strcmp(cam_fmt_array.format_array[i].name, EXAMPLE_CAM_FORMAT)) {
             cam_cur_fmt = (esp_cam_sensor_format_t *)&cam_fmt_array.format_array[i];
         }
     }
-    assert(cam_cur_fmt);  /* 确保找到目标格式 */
-    /* 应用选定的格式 */
-    ESP_RETURN_ON_ERROR(esp_cam_sensor_set_format(cam, cam_cur_fmt), TAG, "设置格式失败");
-    ESP_LOGI(TAG, "当前格式: %s", cam_cur_fmt->name);
+    assert(cam_cur_fmt);
+    ESP_RETURN_ON_ERROR(esp_cam_sensor_set_format(cam, cam_cur_fmt), TAG, "Set format failed");
+    ESP_LOGI(TAG, "Current format: %s", cam_cur_fmt->name);
 
     /* ========== 步骤6.5: 调整传感器寄存器 - 适度提高画面亮度 ========== */
-    /* 必须在启动数据流之前写入，否则会导致帧输出异常 */
     esp_cam_sensor_reg_val_t ae_regs[] = {
-        /* AE 目标亮度：略高于默认 */
-        {.regaddr = 0x3A0F, .value = 0x68},  /* AE target high (默认0x58) */
-        {.regaddr = 0x3A10, .value = 0x60},  /* AE target low  (默认0x50) */
+        {.regaddr = 0x3A0F, .value = 0x68},  /* AE target high */
+        {.regaddr = 0x3A10, .value = 0x60},  /* AE target low */
         {.regaddr = 0x3A1B, .value = 0x68},  /* AE target high fast */
         {.regaddr = 0x3A1E, .value = 0x60},  /* AE target low fast */
-        {.regaddr = 0x3A11, .value = 0x70},  /* AE fast high threshold (默认0x60) */
-        {.regaddr = 0x3A1F, .value = 0x28},  /* AE fast low threshold  (默认0x28) */
-        /* 增益上限：24x（平衡亮度和噪点） */
+        {.regaddr = 0x3A11, .value = 0x70},  /* AE fast high threshold */
+        {.regaddr = 0x3A1F, .value = 0x28},  /* AE fast low threshold */
         {.regaddr = 0x3A18, .value = 0x01},  /* gain ceiling high */
-        {.regaddr = 0x3A19, .value = 0xC0},  /* gain ceiling low */
+        {.regaddr = 0x3A19, .value = 0xC0},  /* gain ceiling low (24x) */
     };
     for (int i = 0; i < sizeof(ae_regs)/sizeof(ae_regs[0]); i++) {
         esp_err_t reg_ret = esp_cam_sensor_ioctl(cam, ESP_CAM_SENSOR_IOC_S_REG, &ae_regs[i]);
@@ -269,76 +485,100 @@ esp_err_t camera_init(esp_cam_ctlr_handle_t *cam_handle, esp_cam_ctlr_trans_t *t
             ESP_LOGW(TAG, "Failed to write reg 0x%04X: %s", ae_regs[i].regaddr, esp_err_to_name(reg_ret));
         }
     }
-    ESP_LOGI(TAG, "OV5647 AE target adjusted (0x68/0x60), gain ceiling 24x");
+    ESP_LOGI(TAG, "OV5647 AE target adjusted, gain ceiling 24x");
 
     /* ========== 步骤7: 启动传感器数据流 ========== */
     int enable_flag = 1;
     ESP_RETURN_ON_ERROR(esp_cam_sensor_ioctl(cam, ESP_CAM_SENSOR_IOC_S_STREAM, &enable_flag),
-                        TAG, "传感器数据流启动失败");
+                        TAG, "Sensor stream start failed");
 
-    /* ========== 步骤8: 初始化CSI控制器 ========== */
-    /* CSI(Camera Serial Interface)用于接收MIPI摄像头数据 */
-    /* 注意: v1.0芯片CSI仅支持bypass模式，无法进行格式转换 */
+    /* ========== 步骤8: CSI 控制器 ========== */
     esp_cam_ctlr_csi_config_t csi_config = {
-        .ctlr_id = 0,                                    /* 控制器ID */
-        .h_res = CAM_H_RES,                              /* 水平分辨率 */
-        .v_res = CAM_V_RES,                              /* 垂直分辨率 */
-        .lane_bit_rate_mbps = EXAMPLE_MIPI_CSI_LANE_BITRATE_MBPS,  /* 数据速率(Mbps) */
-        .input_data_color_type = CAM_CTLR_COLOR_RAW8,    /* 输入数据格式: RAW8 */
-        .output_data_color_type = CAM_CTLR_COLOR_RAW8,   /* 输出数据格式: RAW8(bypass) */
-        .data_lane_num = 2,                              /* 数据通道数 */
-        .byte_swap_en = false,                           /* 禁用字节交换 */
-        .queue_items = 1,                                /* 传输队列深度 */
+        .ctlr_id = 0,
+        .h_res = CAM_H_RES,
+        .v_res = CAM_V_RES,
+        .lane_bit_rate_mbps = EXAMPLE_MIPI_CSI_LANE_BITRATE_MBPS,
+        .input_data_color_type = CAM_CTLR_COLOR_RAW8,
+        .output_data_color_type = CAM_CTLR_COLOR_RAW8,
+        .data_lane_num = 2,
+        .byte_swap_en = false,
+        .queue_items = 1,
     };
     ret = esp_cam_new_csi_ctlr(&csi_config, cam_handle);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "CSI初始化失败[%d]", ret);
+        ESP_LOGE(TAG, "CSI init failed [%d]", ret);
         return ret;
     }
 
-    /* 注册回调函数 */
     esp_cam_ctlr_evt_cbs_t cbs = {
-        .on_get_new_trans = s_camera_get_new_vb,         /* 新帧请求回调 */
-        .on_trans_finished = s_camera_get_finished_trans, /* 帧完成回调 */
+        .on_get_new_trans = s_camera_get_new_vb,
+        .on_trans_finished = s_camera_get_finished_trans,
     };
-    ESP_RETURN_ON_ERROR(esp_cam_ctlr_register_event_callbacks(*cam_handle, &cbs, trans),
-                        TAG, "注册回调失败");
+    ESP_RETURN_ON_ERROR(esp_cam_ctlr_register_event_callbacks(*cam_handle, &cbs, trans), TAG, "Register callbacks failed");
+    ESP_RETURN_ON_ERROR(esp_cam_ctlr_enable(*cam_handle), TAG, "CSI enable failed");
 
-    /* 使能CSI控制器 */
-    ESP_RETURN_ON_ERROR(esp_cam_ctlr_enable(*cam_handle), TAG, "CSI使能失败");
-
-    /* ========== 步骤9: 初始化ISP图像信号处理器 ========== */
-    /* ISP负责将RAW8格式转换为RGB565格式 */
+    /* ========== 步骤9: ISP 处理器 ========== */
     esp_isp_processor_cfg_t isp_config = {
-        .clk_hz = 80 * 1000 * 1000,                      /* ISP时钟: 80MHz */
-        .input_data_source = ISP_INPUT_DATA_SOURCE_CSI,   /* 数据源: CSI */
-        .input_data_color_type = ISP_COLOR_RAW8,          /* 输入格式: RAW8 */
-        .output_data_color_type = ISP_COLOR_RGB565,       /* 输出格式: RGB565 */
-        .has_line_start_packet = false,                    /* 无行起始包 */
-        .has_line_end_packet = false,                      /* 无行结束包 */
-        .h_res = CAM_H_RES,                               /* 水平分辨率 */
-        .v_res = CAM_V_RES,                               /* 垂直分辨率 */
-        .bayer_order = COLOR_RAW_ELEMENT_ORDER_GBRG,      /* Bayer模式排列顺序 */
+        .clk_hz = 80 * 1000 * 1000,
+        .input_data_source = ISP_INPUT_DATA_SOURCE_CSI,
+        .input_data_color_type = ISP_COLOR_RAW8,
+        .output_data_color_type = ISP_COLOR_RGB565,
+        .has_line_start_packet = false,
+        .has_line_end_packet = false,
+        .h_res = CAM_H_RES,
+        .v_res = CAM_V_RES,
+        .bayer_order = COLOR_RAW_ELEMENT_ORDER_GBRG,
     };
-    ESP_RETURN_ON_ERROR(esp_isp_new_processor(&isp_config, &s_isp_proc), TAG, "ISP创建失败");
-    ESP_RETURN_ON_ERROR(esp_isp_enable(s_isp_proc), TAG, "ISP使能失败");
+    ESP_RETURN_ON_ERROR(esp_isp_new_processor(&isp_config, &s_isp_proc), TAG, "ISP create failed");
+    ESP_RETURN_ON_ERROR(esp_isp_enable(s_isp_proc), TAG, "ISP enable failed");
 
-    /* ========== 步骤10: 配置去马赛克(Demosaic)模块 ========== */
-    /* 去马赛克是将Bayer格式转换为全彩色图像的关键步骤 */
-    /* 当CSI输出RAW8格式时必须启用(v1.0芯片) */
-    esp_isp_demosaic_config_t demosaic_config = {
-        .grad_ratio = {
-            .integer = 2,    /* 梯度比整数部分 */
-            .decimal = 5,    /* 梯度比小数部分(实际值2.5) */
-        },
-    };
-    ESP_RETURN_ON_ERROR(esp_isp_demosaic_configure(s_isp_proc, &demosaic_config), TAG, "去马赛克配置失败");
-    ESP_RETURN_ON_ERROR(esp_isp_demosaic_enable(s_isp_proc), TAG, "去马赛克使能失败");
-
-    /* ========== 步骤11-15: ISP增强模块（逐个启用，不支持的自动跳过） ========== */
+    /* ========== ISP 流水线模块（按硬件顺序） ========== */
     int isp_enhanced = 0;
 
-    /* CCM: 颜色校正矩阵 - 还原真实色彩 */
+    /* [1] BLC: 黑电平校正 */
+#if CONFIG_ESP32P4_REV_MIN_FULL >= 300
+    if (camera_config_blc(s_isp_proc) == ESP_OK) {
+        isp_enhanced++;
+    }
+#endif
+
+    /* [2] BF: 双边滤波降噪 */
+    esp_isp_bf_config_t bf_config = {
+        .denoising_level = 3,
+        .padding_mode = 0,
+        .padding_data = 0,
+        .bf_template = {{1,2,1},{2,4,2},{1,2,1}},
+        .flags = {.update_once_configured = 1},
+    };
+    if (esp_isp_bf_configure(s_isp_proc, &bf_config) == ESP_OK &&
+        esp_isp_bf_enable(s_isp_proc) == ESP_OK) {
+        ESP_LOGI(TAG, "BF enabled (denoising_level=3)");
+        isp_enhanced++;
+    }
+
+    /* [3] LSC: 镜头阴影校正 */
+#if CONFIG_ESP32P4_REV_MIN_FULL >= 100
+    if (camera_config_lsc(s_isp_proc) == ESP_OK) {
+        isp_enhanced++;
+    }
+#endif
+
+    /* [4] Demosaic: 去马赛克 (RAW8 → RGB) */
+    esp_isp_demosaic_config_t demosaic_config = {
+        .grad_ratio = { .integer = 2, .decimal = 5 },
+    };
+    ESP_RETURN_ON_ERROR(esp_isp_demosaic_configure(s_isp_proc, &demosaic_config), TAG, "Demosaic config failed");
+    ESP_RETURN_ON_ERROR(esp_isp_demosaic_enable(s_isp_proc), TAG, "Demosaic enable failed");
+    isp_enhanced++;
+
+    /* [5] WBG + AWB: 白平衡（在 Demosaic 之后，CCM 之前） */
+    if (camera_init_awb(s_isp_proc) == ESP_OK) {
+        isp_enhanced++;
+    } else {
+        ESP_LOGW(TAG, "AWB not available, using fixed white balance");
+    }
+
+    /* [6] CCM: 颜色校正矩阵 */
     esp_isp_ccm_config_t ccm_config = {
         .matrix = {
             { 2.0000, -0.5459, -0.4541},
@@ -350,17 +590,43 @@ esp_err_t camera_init(esp_cam_ctlr_handle_t *cam_handle, esp_cam_ctlr_trans_t *t
     };
     if (esp_isp_ccm_configure(s_isp_proc, &ccm_config) == ESP_OK &&
         esp_isp_ccm_enable(s_isp_proc) == ESP_OK) {
-        ESP_LOGI(TAG, "CCM enabled (OV5647 default matrix)");
+        ESP_LOGI(TAG, "CCM enabled (OV5647 matrix)");
         isp_enhanced++;
-    } else {
-        ESP_LOGW(TAG, "CCM not supported on this chip, skipping");
     }
 
-    /* Color: 亮度/对比度/饱和度 */
+    /* [7] Gamma: 伽马校正 */
+    isp_gamma_curve_points_t gamma_pts;
+    esp_isp_gamma_fill_curve_points(gamma_brighten, &gamma_pts);
+    if (esp_isp_gamma_configure(s_isp_proc, COLOR_COMPONENT_R, &gamma_pts) == ESP_OK &&
+        esp_isp_gamma_configure(s_isp_proc, COLOR_COMPONENT_G, &gamma_pts) == ESP_OK &&
+        esp_isp_gamma_configure(s_isp_proc, COLOR_COMPONENT_B, &gamma_pts) == ESP_OK &&
+        esp_isp_gamma_enable(s_isp_proc) == ESP_OK) {
+        ESP_LOGI(TAG, "Gamma enabled (param=0.6)");
+        isp_enhanced++;
+    }
+
+    /* [8] Sharpen: 锐化 */
+    esp_isp_sharpen_config_t sharpen_config = {
+        .h_freq_coeff = { .integer = 0, .decimal = 10 },  /* 10/32 ≈ 0.31 */
+        .m_freq_coeff = { .integer = 0, .decimal = 15 },  /* 15/32 ≈ 0.47 */
+        .h_thresh = 100,
+        .l_thresh = 30,
+        .padding_mode = 0,
+        .padding_data = 0,
+        .sharpen_template = {{1,2,1},{2,2,2},{1,2,1}},
+        .flags = {.update_once_configured = 1},
+    };
+    if (esp_isp_sharpen_configure(s_isp_proc, &sharpen_config) == ESP_OK &&
+        esp_isp_sharpen_enable(s_isp_proc) == ESP_OK) {
+        ESP_LOGI(TAG, "Sharpen enabled (h=0.31 m=0.47)");
+        isp_enhanced++;
+    }
+
+    /* [9] Color: 亮度/对比度/饱和度 */
     esp_isp_color_config_t color_config = {
-        .color_brightness = 35,    /* 亮度 +35 (适度提亮，避免过曝) */
-        .color_contrast = {.integer = 0, .decimal = 108},  /* 对比度 0.85 */
-        .color_saturation = {.integer = 0, .decimal = 102}, /* 饱和度 0.8 */
+        .color_brightness = 35,
+        .color_contrast = { .integer = 0, .decimal = 108 },
+        .color_saturation = { .integer = 0, .decimal = 102 },
         .color_hue = 0,
         .flags = {.update_once_configured = 1},
     };
@@ -368,72 +634,12 @@ esp_err_t camera_init(esp_cam_ctlr_handle_t *cam_handle, esp_cam_ctlr_trans_t *t
         esp_isp_color_enable(s_isp_proc) == ESP_OK) {
         ESP_LOGI(TAG, "Color enabled (bright=+35 contrast=0.85 sat=0.8)");
         isp_enhanced++;
-    } else {
-        ESP_LOGW(TAG, "Color not supported on this chip, skipping");
     }
 
-    /* Sharpen: 锐化 - 适度锐化避免噪点放大 */
-    esp_isp_sharpen_config_t sharpen_config = {
-        .h_freq_coeff = {.integer = 0, .decimal = 80},   /* 0.31 (补偿固定焦距模糊) */
-        .m_freq_coeff = {.integer = 0, .decimal = 120},  /* 0.47 */
-        .h_thresh = 100,          /* 只锐化最强边缘 */
-        .l_thresh = 30,
-        .padding_mode = 0,
-        .padding_data = 0,
-        .sharpen_template = {{1,2,1},{2,2,2},{1,2,1}},
-        .padding_line_tail_valid_start_pixel = 0,
-        .padding_line_tail_valid_end_pixel = 0,
-        .flags = {.update_once_configured = 1},
-    };
-    if (esp_isp_sharpen_configure(s_isp_proc, &sharpen_config) == ESP_OK &&
-        esp_isp_sharpen_enable(s_isp_proc) == ESP_OK) {
-        ESP_LOGI(TAG, "Sharpen enabled (h=0.31 m=0.47 thresh=100/30)");
-        isp_enhanced++;
-    } else {
-        ESP_LOGW(TAG, "Sharpen not supported on this chip, skipping");
-    }
-
-    /* BF: 双边滤波 - 降噪 (降低级别保留更多细节) */
-    esp_isp_bf_config_t bf_config = {
-        .denoising_level = 3,      /* 5→3: 减少降噪强度，保留更多细节 */
-        .padding_mode = 0,
-        .padding_data = 0,
-        .bf_template = {{1,2,1},{2,4,2},{1,2,1}},
-        .flags = {.update_once_configured = 1},
-    };
-    if (esp_isp_bf_configure(s_isp_proc, &bf_config) == ESP_OK &&
-        esp_isp_bf_enable(s_isp_proc) == ESP_OK) {
-        ESP_LOGI(TAG, "BF enabled (denoising_level=3)");
-        isp_enhanced++;
-    } else {
-        ESP_LOGW(TAG, "BF not supported on this chip, skipping");
-    }
-
-    /* Gamma: 伽马校正 - 暗部提亮 (gamma=0.5, 比默认0.72更亮) */
-    isp_gamma_curve_points_t gamma_pts;
-    esp_isp_gamma_fill_curve_points(gamma_brighten, &gamma_pts);
-    if (esp_isp_gamma_configure(s_isp_proc, COLOR_COMPONENT_R, &gamma_pts) == ESP_OK &&
-        esp_isp_gamma_configure(s_isp_proc, COLOR_COMPONENT_G, &gamma_pts) == ESP_OK &&
-        esp_isp_gamma_configure(s_isp_proc, COLOR_COMPONENT_B, &gamma_pts) == ESP_OK &&
-        esp_isp_gamma_enable(s_isp_proc) == ESP_OK) {
-        ESP_LOGI(TAG, "Gamma enabled (param=0.6, moderate shadow brighten)");
-        isp_enhanced++;
-    } else {
-        ESP_LOGW(TAG, "Gamma not supported on this chip, skipping");
-    }
-
-    ESP_LOGI(TAG, "摄像头初始化完成 (%dx%d RAW10 -> RGB565, ISP增强模块: %d/5)", CAM_H_RES, CAM_V_RES, isp_enhanced);
+    ESP_LOGI(TAG, "Camera init done (%dx%d RAW8→RGB565, ISP modules: %d)", CAM_H_RES, CAM_V_RES, isp_enhanced);
     return ESP_OK;
 }
 
-/**
- * @brief 启动摄像头数据采集
- * @param cam_handle CSI控制器句柄(由camera_init返回)
- * @return ESP_OK 成功，其他值表示失败
- *
- * 调用此函数后，摄像头开始输出帧数据，
- * 帧数据通过双缓冲机制和信号量传递给显示任务
- */
 esp_err_t camera_start(esp_cam_ctlr_handle_t cam_handle)
 {
     return esp_cam_ctlr_start(cam_handle);
@@ -450,18 +656,42 @@ i2c_master_bus_handle_t camera_get_i2c_bus_handle(void)
 }
 
 /**
- * @brief 释放 ISP 资源，深度睡眠前必须调用
+ * @brief 释放 ISP 资源（深度睡眠前调用）
  */
 void camera_deinit(void)
 {
+    /* 停止 AWB */
+    if (s_awb_task_handle) {
+        vTaskDelete(s_awb_task_handle);
+        s_awb_task_handle = NULL;
+    }
+    if (s_awb_ctlr) {
+        esp_isp_awb_controller_stop_continuous_statistics(s_awb_ctlr);
+        esp_isp_awb_controller_disable(s_awb_ctlr);
+        esp_isp_del_awb_controller(s_awb_ctlr);
+        s_awb_ctlr = NULL;
+    }
+    if (s_awb_queue) {
+        vQueueDeleteWithCaps(s_awb_queue);
+        s_awb_queue = NULL;
+    }
+
+    /* 释放 ISP */
     if (s_isp_proc) {
         ESP_LOGI(TAG, "Disabling ISP pipeline...");
+        esp_isp_wbg_disable(s_isp_proc);
         esp_isp_gamma_disable(s_isp_proc);
         esp_isp_bf_disable(s_isp_proc);
         esp_isp_sharpen_disable(s_isp_proc);
         esp_isp_color_disable(s_isp_proc);
         esp_isp_ccm_disable(s_isp_proc);
         esp_isp_demosaic_disable(s_isp_proc);
+#if CONFIG_ESP32P4_REV_MIN_FULL >= 100
+        esp_isp_lsc_disable(s_isp_proc);
+#endif
+#if CONFIG_ESP32P4_REV_MIN_FULL >= 300
+        esp_isp_blc_disable(s_isp_proc);
+#endif
         esp_isp_disable(s_isp_proc);
         esp_isp_del_processor(s_isp_proc);
         s_isp_proc = NULL;

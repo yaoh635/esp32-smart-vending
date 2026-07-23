@@ -1,4 +1,6 @@
 #include "who_detect.hpp"
+#include "esp_timer.h"
+#include "esp_log.h"
 
 namespace who {
 namespace detect {

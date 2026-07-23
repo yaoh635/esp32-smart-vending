@@ -98,9 +98,19 @@ static esp_err_t create_default_inventory(void)
     s_inventory_count = DEFAULT_COUNT;
 
     /* 尝试写入 SD 卡 */
+    ESP_LOGI(TAG, "Attempting to create inventory file at %s", INVENTORY_CSV_PATH);
     FILE *f = fopen(INVENTORY_CSV_PATH, "w");
     if (!f) {
-        ESP_LOGW(TAG, "SD card unavailable, using RAM-only inventory (%d products), errno=%d", DEFAULT_COUNT, errno);
+        ESP_LOGE(TAG, "SD card write failed: errno=%d, path=%s", errno, INVENTORY_CSV_PATH);
+        /* 诊断：检查 SD 卡根目录是否可写 */
+        FILE *tf = fopen("/sdcard/inv_test.tmp", "w");
+        if (tf) {
+            ESP_LOGI(TAG, "SD card root is writable, but subpath failed");
+            fclose(tf);
+            remove("/sdcard/inv_test.tmp");
+        } else {
+            ESP_LOGE(TAG, "SD card root also not writable (errno=%d)", errno);
+        }
         s_sd_available = false;
         return ESP_OK;  /* 降级成功，不返回错误 */
     }
