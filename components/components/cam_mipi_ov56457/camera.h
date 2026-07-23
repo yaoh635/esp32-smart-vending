@@ -37,11 +37,19 @@ esp_err_t camera_start(esp_cam_ctlr_handle_t cam_handle);
  */
 void camera_deinit(void);
 
-/* Accessors for display task */
+/* Accessors for frame buffers */
 void     *camera_get_frame_buffer(int index);
 size_t    camera_get_frame_buffer_size(void);
 SemaphoreHandle_t camera_get_frame_ready_sem(void);
 volatile int *camera_get_display_buf_idx_ptr(void);
+
+/**
+ * @brief 获取最新完成的帧缓冲区指针
+ *
+ * 返回 CSI 刚写完的帧（ping-pong 中非活动的那个）。
+ * 适用于 web server 读取最新帧，无需关心索引。
+ */
+void     *camera_get_latest_frame(void);
 
 /* Sensor handle for register access */
 #include "esp_cam_sensor.h"

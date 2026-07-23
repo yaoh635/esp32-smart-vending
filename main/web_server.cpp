@@ -212,9 +212,10 @@ static esp_err_t stream_handler(httpd_req_t *req)
 
         uint8_t *jpeg_buf = nullptr;
         size_t jpeg_len = 0;
-        ret = rgb565_to_jpeg((const uint8_t *)fb->buf,
-                              fb->width, fb->height, 50,
-                              &jpeg_buf, &jpeg_len);
+        /* 半分辨率编码（800×800 → 400×400），减少编码时间 + 带宽 */
+        ret = rgb565_to_jpeg_half((const uint8_t *)fb->buf,
+                                   fb->width, fb->height,
+                                   &jpeg_buf, &jpeg_len);
         if (ret != ESP_OK || !jpeg_buf) {
             vTaskDelay(pdMS_TO_TICKS(100));
             continue;
@@ -235,7 +236,7 @@ static esp_err_t stream_handler(httpd_req_t *req)
             break;
         }
 
-        vTaskDelay(pdMS_TO_TICKS(20));
+        vTaskDelay(pdMS_TO_TICKS(100));  /* ~10 FPS，减少 WiFi 带宽压力 */
     }
 
     ESP_LOGI(TAG, "MJPEG stream ended");
@@ -1094,9 +1095,14 @@ extern "C" esp_err_t web_server_start(const web_server_config_t *config)
         return ret;
     }
 
-    /* Configure HTTP server — larger stack for REST API handlers */
+    /* 内存诊断 */
+    ESP_LOGI(TAG, "Free heap: %u, PSRAM: %u",
+             (unsigned)esp_get_free_heap_size(),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+
+    /* Configure HTTP server */
     httpd_config_t http_cfg = HTTPD_DEFAULT_CONFIG();
-    http_cfg.stack_size = 32768;
+    http_cfg.stack_size = 16384;       /* 16KB 足够 REST API + MJPEG */
     http_cfg.max_uri_handlers = 24;
     http_cfg.lru_purge_enable = true;
 
