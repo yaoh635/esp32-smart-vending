@@ -544,7 +544,7 @@ esp_err_t camera_init(esp_cam_ctlr_handle_t *cam_handle, esp_cam_ctlr_trans_t *t
 
     /* [2] BF: 双边滤波降噪 */
     esp_isp_bf_config_t bf_config = {
-        .denoising_level = 3,
+        .denoising_level = 2,
         .padding_mode = 0,
         .padding_data = 0,
         .bf_template = {{1,2,1},{2,4,2},{1,2,1}},
@@ -552,7 +552,7 @@ esp_err_t camera_init(esp_cam_ctlr_handle_t *cam_handle, esp_cam_ctlr_trans_t *t
     };
     if (esp_isp_bf_configure(s_isp_proc, &bf_config) == ESP_OK &&
         esp_isp_bf_enable(s_isp_proc) == ESP_OK) {
-        ESP_LOGI(TAG, "BF enabled (denoising_level=3)");
+        ESP_LOGI(TAG, "BF enabled (denoising_level=2)");
         isp_enhanced++;
     }
 
@@ -607,8 +607,8 @@ esp_err_t camera_init(esp_cam_ctlr_handle_t *cam_handle, esp_cam_ctlr_trans_t *t
 
     /* [8] Sharpen: 锐化 */
     esp_isp_sharpen_config_t sharpen_config = {
-        .h_freq_coeff = { .integer = 0, .decimal = 10 },  /* 10/32 ≈ 0.31 */
-        .m_freq_coeff = { .integer = 0, .decimal = 15 },  /* 15/32 ≈ 0.47 */
+        .h_freq_coeff = { .integer = 0, .decimal = 16 },  /* 16/32 = 0.5 */
+        .m_freq_coeff = { .integer = 0, .decimal = 20 },  /* 20/32 = 0.625 */
         .h_thresh = 100,
         .l_thresh = 30,
         .padding_mode = 0,
@@ -618,7 +618,7 @@ esp_err_t camera_init(esp_cam_ctlr_handle_t *cam_handle, esp_cam_ctlr_trans_t *t
     };
     if (esp_isp_sharpen_configure(s_isp_proc, &sharpen_config) == ESP_OK &&
         esp_isp_sharpen_enable(s_isp_proc) == ESP_OK) {
-        ESP_LOGI(TAG, "Sharpen enabled (h=0.31 m=0.47)");
+        ESP_LOGI(TAG, "Sharpen enabled (h=0.50 m=0.625)");
         isp_enhanced++;
     }
 

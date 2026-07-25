@@ -162,19 +162,19 @@ dependencies:
       type: local
     version: 0.4.2
   espressif/wifi_remote_over_eppp:
-    component_hash: 06d8bc15348bbd21f1390daace36ed5adcf6026c93c5b69decc55fa04df2711a
+    component_hash: 1fd6968af20f0b19e421f6b519b0a8caf81d689afc3783b564c28559e45f66ef
     dependencies:
-    - name: idf
-      require: private
-      version: '>=5.3'
     - name: espressif/eppp_link
       registry_url: https://components.espressif.com
       require: private
       version: '>=0.1'
+    - name: idf
+      require: private
+      version: '>=5.3'
     source:
       registry_url: https://components.espressif.com
       type: service
-    version: 0.3.2
+    version: 0.3.3
   idf:
     source:
       type: idf
@@ -203,6 +203,6 @@ direct_dependencies:
 - espressif/human_face_detect
 - idf
 - lvgl/lvgl
-manifest_hash: f815c2bfb6a1d56bbf069082e5fa51b4caa8a9057f85416edad88b13688715bf
+manifest_hash: da18eee36db2771e406cf949cf6a31c947554334b60314c7ca9737947ed7b74c
 target: esp32p4
 version: 2.0.0
