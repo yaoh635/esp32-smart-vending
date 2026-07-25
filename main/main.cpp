@@ -444,8 +444,8 @@ extern "C" void app_main(void)
 
     /* 检测阈值 0.3（模糊画面需要低阈值），误检由冷却+相似度+注册限制过滤 */
     auto *detect_model = new HumanFaceDetect(HumanFaceDetect::MSRMNP_S8_V1);
-    detect_model->set_score_thr(0.3f, 0);  /* MSR阶段: 0.3 */
-    detect_model->set_score_thr(0.3f, 1);  /* MNP阶段: 0.3 */
+    detect_model->set_score_thr(0.2f, 0);  /* MSR阶段: 0.2 */
+    detect_model->set_score_thr(0.2f, 1);  /* MNP阶段: 0.2 */
     detect_model->set_nms_thr(0.4f, 0);    /* MSR NMS: 0.4 */
     detect_model->set_nms_thr(0.4f, 1);    /* MNP NMS: 0.4 */
     g_detector->set_model(detect_model);
