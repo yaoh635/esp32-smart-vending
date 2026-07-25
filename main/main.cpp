@@ -366,9 +366,8 @@ static void face_monitor_task(void *arg)
                 esp_err_t err = esp_light_sleep_start();
 
                 if (err == ESP_OK) {
-                    ESP_LOGI(TAG, "Woke up from light sleep, GPIO%d level: %d",
-                             WAKEUP_GPIO,
-                             gpio_get_level(WAKEUP_GPIO));
+                    ESP_LOGI(TAG, "Woke up from light sleep, restarting...");
+                    esp_restart();
                 } else {
                     ESP_LOGW(TAG, "Light sleep failed: %s", esp_err_to_name(err));
                 }
